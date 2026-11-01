@@ -1,0 +1,43 @@
+# Environment
+.DS_Store
+.env
+.env.local
+.env.*.local
+
+# Node.js
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+package-lock.json
+
+# Docker
+.docker/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+Thumbs.db
+
+# Logs
+logs/
+*.log
+
+# Artifacts
+dist/
+build/
+.cache/
+
+# Test
+coverage/
+.nyc_output/
+
+# Docker Compose volumes
+volumes/
+postgres_data/
