@@ -1,0 +1,12 @@
+.git
+.gitignore
+.kiro
+.claude
+.worktrees
+docs
+specs
+README.md
+spec.md
+plan.md
+tasks.md
+analyze.md
