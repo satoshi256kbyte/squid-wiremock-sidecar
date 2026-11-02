@@ -1,5 +1,9 @@
 # Tasks: ECS サイドカープロキシ E2E テスト基盤
 
+このファイルの16項目は、Issue内で実施する実装サブタスクのチェックリストである。
+Spec Kitの実行単位は1 Issueとし、Issue一覧、優先度、順番は
+[docs/roadmap.md](./docs/roadmap.md)を正とする。
+
 実装タスク一覧（4 Phase × 3～4 task/Phase）
 
 ## Phase 1: Foundation
