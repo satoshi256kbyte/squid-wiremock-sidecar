@@ -1,5 +1,6 @@
 FROM alpine:3.20
 
+RUN apk add --no-cache curl
 RUN addgroup -S app && adduser -S -G app app
 
 COPY test-client/entrypoint.sh /usr/local/bin/entrypoint.sh
