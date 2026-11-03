@@ -28,6 +28,10 @@ services:
       - "3128:3128"
     volumes:
       - ./squid-config/squid.conf:/etc/squid/squid.conf:ro
+      - ./squid-config/whitelist.txt:/etc/squid/whitelist.txt:ro
+    tmpfs:
+      - /var/log/squid:mode=1777
+      - /var/spool/squid:mode=1777
     networks:
       - sidecar
     healthcheck:

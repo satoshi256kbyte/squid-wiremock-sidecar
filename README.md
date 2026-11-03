@@ -32,8 +32,9 @@ Test Client → Squid Proxy (localhost:3128) → WireMock (Mock Server)
 - [requirements.md](./docs/requirements.md) - 要件定義書
 - [spec.md](./spec.md) - 仕様書（success criteria）
 - [plan.md](./plan.md) - 技術設計・実装方針
-- [tasks.md](./tasks.md) - 実装タスク 16 件（工数 11h）
-- [analyze.md](./analyze.md) - 整合性検査
+- [roadmap.md](./docs/roadmap.md) - Issue単位の完成ロードマップ（11 Issue）
+- [tasks.md](./tasks.md) - Issue内で使う実装サブタスク一覧
+- [analyze.md](./analyze.md) - 全体設計の整合性検査
 
 ## Quick Start
 
@@ -45,7 +46,7 @@ cd squid-wiremock-sidecar
 # 2. Docker Compose で環境構築（実装後）
 docker-compose up -d
 
-# 3. E2E テスト実行（実装後）
+# 3. E2E テスト実行（M09 実装後に提供予定）
 pnpm test
 
 # 4. 環境破棄
@@ -92,6 +93,7 @@ docker-compose down
 │
 ├── docs/
 │   ├── requirements.md        # 要件定義書
+│   ├── roadmap.md             # Issue単位の完成ロードマップ
 │   ├── setup-guide.md         # セットアップ手順 (実装後)
 │   └── troubleshooting.md     # トラブルシューティング (実装後)
 │
@@ -128,17 +130,20 @@ docker-compose down
 
 ## Implementation Roadmap
 
-| Phase | Effort | Week |
-|-------|--------|------|
-| Phase 1: Foundation | 3.5h | W1 |
-| Phase 2: WireMock Integration | 2.25h | W1-W2 |
-| Phase 3: Test Suite | 3.25h | W2-W3 |
-| Phase 4: CI & Docs | 2h | W3-W4 |
-| **Total** | **11h** | **1-2 weeks** |
+実装は、1Issueを1回のSpec Kit実行単位として、優先度と依存関係の順に進めます。
 
-詳細は [tasks.md](./tasks.md) 参照。
+| Phase | Issue | 完了条件 |
+|-------|-------|----------|
+| Phase 1: 閉域通信の基盤 | M01〜M05 | Client → Squid → WireMockを検証できる |
+| Phase 2: 耐障害性とE2E | M06〜M08 | 4つの代表シナリオが通る |
+| Phase 3: CI、文書、受入 | M09〜M11 | ローカルとCIの受入条件を満たす |
+
+順番、優先度、各IssueのAcceptance Criteriaは
+[docs/roadmap.md](./docs/roadmap.md)を参照。
 
 ## Development Workflow
+
+以下の pnpm 入口は M09 実装後に提供予定であり、現時点では利用できません。
 
 ```bash
 # ローカルテスト（Colima 環境）
@@ -152,10 +157,10 @@ pnpm clean           # リソース完全削除
 
 ## CI/CD Integration
 
-GitHub Actions workflow（`.github/workflows/e2e-test.yml`）により、
-PR/push 時に自動的に E2E テストを実行します。
+M09 実装後は、GitHub Actions workflow（`.github/workflows/e2e-test.yml`）により、
+PR/push 時に自動的に E2E テストを実行する予定です。
 
-実行時間: < 3 分
+実行時間の目標: < 3 分
 
 ## Troubleshooting
 
