@@ -64,14 +64,16 @@ docker-compose down
 ### Squid Proxy
 
 - フォワードプロキシ
-- localhost:3128 でリッスン
+- 127.0.0.1:3128 でリッスン
 - cache_peer で特定ドメインの通信を WireMock へ転送
 
 ### WireMock Mock Server
 
-- REST API mock server（localhost:8080）
+- REST API mock server（127.0.0.1:8080）
 - JSON で request/response をコード化
 - HTTP status、delay、headers をカスタマイズ可能
+
+ホストからの公開範囲と、別マシンから使う場合の手段は [ポート公開範囲](docs/ポート公開範囲.md) を参照。
 
 ## Testing Scenarios
 

@@ -25,7 +25,7 @@ services:
   squid:
     image: ubuntu/squid:latest
     ports:
-      - "3128:3128"
+      - "127.0.0.1:3128:3128"
     volumes:
       - ./squid-config/squid.conf:/etc/squid/squid.conf:ro
       - ./squid-config/whitelist.txt:/etc/squid/whitelist.txt:ro
@@ -44,7 +44,7 @@ services:
   wiremock:
     image: wiremock/wiremock:3.13.1
     ports:
-      - "8080:8080"
+      - "127.0.0.1:8080:8080"
     volumes:
       - ./wiremock-scenarios:/home/wiremock:ro
     networks:
