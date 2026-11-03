@@ -1,4 +1,5 @@
 {
+  "name": "ratelimit-429",
   "request": {
     "method": "GET",
     "urlPath": "/api/ratelimit"

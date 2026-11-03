@@ -82,6 +82,8 @@ docker-compose down
 | Timeout Handling | 200 | 5000ms | ✓ timeout | タイムアウト処理検証 |
 | Rate Limit Backoff | 429 | 0ms | ✓ backoff | 速度制限対応検証 |
 
+シナリオの名前による選択、リセット、追加手順、並列実行の禁止は [シナリオの隔離と追加](docs/シナリオ隔離.md) を参照。
+
 ## Directory Structure
 
 ```text
