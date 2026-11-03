@@ -345,7 +345,7 @@ smoke_client() { # docker-compose run に渡す -e 指定
 # WireMock の管理APIで、パス一致の呼び出し件数だけを読む。ジャーナルのリセットはしない。
 wiremock_count() { # URLパス
   _body=$(printf '{"method":"GET","url":"%s"}' "$1")
-  _res=$(curl --fail --silent --show-error -H 'Content-Type: application/json' \
+  _res=$(curl --fail --silent --show-error --connect-timeout 2 --max-time 10 -H 'Content-Type: application/json' \
     -d "$_body" "$smoke_wiremock_url/__admin/requests/count") || return 1
   _n=$(printf '%s' "$_res" | sed -n 's/.*"count" *: *\([0-9][0-9]*\).*/\1/p')
   [ -n "$_n" ] || return 1
@@ -354,12 +354,12 @@ wiremock_count() { # URLパス
 
 # 対象のパスへ直接 HTTP ステータスを読む。Squid は使わない。
 smoke_status() { # URLパス
-  curl --silent --output /dev/null --write-out '%{http_code}' "$smoke_wiremock_url$1" || true
+  curl --connect-timeout 2 --max-time 10 --silent --output /dev/null --write-out '%{http_code}' "$smoke_wiremock_url$1" || true
 }
 
 # Squid 経由で api.example.com のパスへ要求し、HTTP ステータスを読む。
 smoke_via_proxy() { # URLパス
-  curl --noproxy '' --proxy "$smoke_proxy_url" --silent --output /dev/null \
+  curl --noproxy '' --proxy "$smoke_proxy_url" --connect-timeout 2 --max-time 15 --silent --output /dev/null \
     --write-out '%{http_code}' "http://api.example.com$1" || true
 }
 
@@ -369,7 +369,7 @@ smoke_reset_verify() {
 
 # 管理APIの name と request.urlPath が、scenario_path の結果と一致する（plan 6.2 の検査2）。
 smoke_names_match() {
-  curl --fail --silent --show-error "$smoke_wiremock_url/__admin/mappings" \
+  curl --fail --silent --show-error --connect-timeout 2 --max-time 10 "$smoke_wiremock_url/__admin/mappings" \
     >"$smoke_dir/mappings.json" || return 1
   for _n in $(scenario_names); do
     _want=$(scenario_path "$_n") || return 1
