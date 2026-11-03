@@ -30,25 +30,39 @@ git clone -q --no-local "$repo_root" "$snapshot_dir"
 # 実リモートへの経路を断つ。スナップショット内からpushしても届かないようにする
 git -C "$snapshot_dir" remote remove origin
 
-# 作業ツリーの変更（ステージ済み・未ステージ・未追跡）を、HEADの上に重ねる
+# 作業ツリーの変更（ステージ済み・未ステージ・未追跡）を、HEADの上に重ねる。
+# gitの失敗をパイプラインの終了コードに隠さないため、各コマンドを個別に代入する。
+staged=$(git -c core.quotepath=off -C "$repo_root" diff --cached --name-only)
+unstaged=$(git -c core.quotepath=off -C "$repo_root" diff --name-only)
+untracked=$(git -c core.quotepath=off -C "$repo_root" ls-files --others --exclude-standard)
 list="$snapshot_dir/.review-changed.txt"
-{
-  git -c core.quotepath=off -C "$repo_root" diff --cached --name-only
-  git -c core.quotepath=off -C "$repo_root" diff --name-only
-  git -c core.quotepath=off -C "$repo_root" ls-files --others --exclude-standard
-} | sort -u > "$list"
+printf '%s\n%s\n%s\n' "$staged" "$unstaged" "$untracked" | sort -u > "$list"
 
 while IFS= read -r path; do
   [ -n "$path" ] || continue
   src="$repo_root/$path"
   dst="$snapshot_dir/$path"
+
+  # コピー先の祖先にシンボリックリンクがあると、書き込みがスナップショット外へ抜けるため拒否する
+  ancestor=$(dirname "$dst")
+  while [ "$ancestor" != "$snapshot_dir" ] && [ "$ancestor" != "/" ]; do
+    if [ -L "$ancestor" ]; then
+      printf 'FAILED: コピー先の祖先がシンボリックリンク: %s\n' "$ancestor" >&2
+      exit 1
+    fi
+    ancestor=$(dirname "$ancestor")
+  done
+
   if [ -L "$src" ]; then
     # リポジトリ外を指す可能性があるため、リンク先の内容はコピーしない
     printf 'WARNING: シンボリックリンクはスナップショットに含めない: %s\n' "$path" >&2
     rm -f "$dst"
   elif [ -f "$src" ]; then
     mkdir -p "$(dirname "$dst")"
-    cp "$src" "$dst"
+    # 既存のリンクを辿って書き込まないよう、先に削除してから新しく作る。
+    # cp -pで実行権限を保ち、レビュアーがスナップショットで実行したときに失敗しないようにする
+    rm -f "$dst"
+    cp -p "$src" "$dst"
   else
     rm -f "$dst"
   fi

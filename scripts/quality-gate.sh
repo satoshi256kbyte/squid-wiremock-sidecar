@@ -19,13 +19,14 @@ if command -v colima >/dev/null 2>&1 && colima status >/dev/null 2>&1; then
   export DOCKER_HOST=unix:///Users/satoshi/.colima/default/docker.sock
 fi
 
-# core.quotepathをオフにし、日本語のパスを引用符なしで扱う
-changed=$( {
-  git -c core.quotepath=off diff --name-only "$base_ref"...HEAD
-  git -c core.quotepath=off diff --cached --name-only
-  git -c core.quotepath=off diff --name-only
-  git -c core.quotepath=off ls-files --others --exclude-standard
-} | sort -u)
+# core.quotepathをオフにし、日本語のパスを引用符なしで扱う。
+# 各gitを個別の代入で実行する。パイプラインにすると、gitの失敗が後段のsortの終了コードに隠れ、
+# 変更が欠けたままゲートが通ってしまうため。
+committed=$(git -c core.quotepath=off diff --name-only "$base_ref"...HEAD)
+staged=$(git -c core.quotepath=off diff --cached --name-only)
+unstaged=$(git -c core.quotepath=off diff --name-only)
+untracked=$(git -c core.quotepath=off ls-files --others --exclude-standard)
+changed=$(printf '%s\n%s\n%s\n%s\n' "$committed" "$staged" "$unstaged" "$untracked" | sort -u)
 
 printf '%s\n' "$changed" | sed '/^$/d' | sed 's/^/変更: /'
 
