@@ -40,6 +40,7 @@ requests=$(curl --fail --silent --show-error "$wiremock_url/__admin/requests")
 printf '%s' "$requests" | grep -q '/api/users/123'
 
 error_output=$(docker-compose run --rm --no-deps --build \
+  -e RETRY_BACKOFF_BASE_SECONDS=0 \
   -e TEST_API_PATH=/api/error-500 test-client)
 printf '%s' "$error_output" | grep -q '^CLIENT_STATUS=500$'
 printf '%s' "$error_output" | grep -Fq 'Internal Server Error'

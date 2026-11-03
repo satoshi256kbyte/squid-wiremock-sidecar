@@ -67,7 +67,11 @@ fi
 # Compose、Dockerfile、Squid、WireMock、Test Client、統合テストの変更
 if has_match '^(docker-compose\.yml|Dockerfile|squid-config/|wiremock-scenarios/|test-client/|tests/)'; then
   run docker-compose config --quiet
-  for test in tests/m0*.sh; do
+  # 自らComposeのライフサイクルを管理するスモークだけを、変更範囲に応じて実行する。
+  # M02は稼働中のスタックを前提とし、ゲートから起動するとWireMockへ接続できず失敗するため、
+  # AGENTS.mdの方針どおり個別に実行する。
+  printf '%s\n' 'NOTE: tests/m02-routing-smoke.sh は稼働中のスタックが必要なため、ゲートでは実行しない'
+  for test in tests/m03-wiremock-scenarios.sh tests/m04-test-client.sh tests/m05-proxy-integration.sh tests/m06-client-resilience.sh; do
     [ -f "$test" ] || continue
     if has_match "^$test\$|^(docker-compose\.yml|Dockerfile|squid-config/|wiremock-scenarios/|test-client/)"; then
       run sh "$test"
