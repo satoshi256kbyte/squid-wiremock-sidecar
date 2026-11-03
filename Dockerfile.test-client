@@ -5,6 +5,8 @@ RUN addgroup -S app && adduser -S -G app app
 
 COPY test-client/entrypoint.sh /usr/local/bin/entrypoint.sh
 RUN chmod 0755 /usr/local/bin/entrypoint.sh
+COPY test-client/retry-lib.sh /usr/local/bin/retry-lib.sh
+RUN chmod 0644 /usr/local/bin/retry-lib.sh
 
 USER app
 ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]

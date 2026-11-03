@@ -29,8 +29,8 @@ until curl --fail --silent --show-error "$wiremock_url/__admin/mappings" >/dev/n
 done
 
 attempt=0
-until proxy_body=$(curl --noproxy '' --proxy "$proxy_url" --silent --show-error \
-  'http://api.example.com/api/users/123'); do
+until proxy_body=$(curl --fail --noproxy '' --proxy "$proxy_url" --silent --show-error \
+  'http://api.example.com/api/users/123') && printf '%s' "$proxy_body" | grep -Fq '"id": 123'; do
   attempt=$((attempt + 1))
   [ "$attempt" -lt 30 ] || exit 1
   sleep 1
