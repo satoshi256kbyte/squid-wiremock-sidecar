@@ -47,7 +47,7 @@ while :; do
   status=$(curl --noproxy '' --proxy "$proxy_url" --silent --show-error \
     --connect-timeout "$CONNECT_TIMEOUT_SECONDS" --max-time "$RESPONSE_TIMEOUT_SECONDS" \
     --dump-header "$tmp_dir/headers" --output "$tmp_dir/body" --write-out '%{http_code}' \
-    "$api_url")
+    --url "$api_url")
   curl_rc=$?
   set -e
 

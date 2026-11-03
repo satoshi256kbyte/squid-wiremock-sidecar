@@ -335,10 +335,10 @@ CLIENT_BODY=BODYTEXT" 0 ep_obs stdout "404/0/-"
 # T607: タイムアウトと curl オプション。リトライしないこと、オプション値が設定値で入ることを見る。
 unit_entrypoint_timeout() {
   expect "T607 既定のcurl引数は設定値付きでM04の順を保つ" \
-    "[--noproxy][][--proxy][http://proxy.test:3128][--silent][--show-error][--connect-timeout][5][--max-time][10][--dump-header][<file>][--output][<file>][--write-out][%{http_code}][http://api.example.com/api/users/123]" 0 \
+    "[--noproxy][][--proxy][http://proxy.test:3128][--silent][--show-error][--connect-timeout][5][--max-time][10][--dump-header][<file>][--output][<file>][--write-out][%{http_code}][--url][http://api.example.com/api/users/123]" 0 \
     ep_obs curl_args "200/0/-"
   expect "T607 タイムアウト設定の値が引数に入る" \
-    "[--noproxy][][--proxy][http://proxy.test:3128][--silent][--show-error][--connect-timeout][3][--max-time][7][--dump-header][<file>][--output][<file>][--write-out][%{http_code}][http://api.example.com/api/users/123]" 0 \
+    "[--noproxy][][--proxy][http://proxy.test:3128][--silent][--show-error][--connect-timeout][3][--max-time][7][--dump-header][<file>][--output][<file>][--write-out][%{http_code}][--url][http://api.example.com/api/users/123]" 0 \
     ep_obs curl_args "200/0/-" CONNECT_TIMEOUT_SECONDS=3 RESPONSE_TIMEOUT_SECONDS=7
   expect "T607 タイムアウトの標準エラーはtimeoutだけ" \
     "CLIENT_ERROR=timeout
@@ -479,6 +479,9 @@ run_smoke() {
     exit "$rc"
   }
   trap cleanup EXIT
+  # 中断でもEXITの後始末（コンテナと一時ディレクトリ）を通す。終了コードは cleanup が保つ。
+  trap 'exit 130' INT
+  trap 'exit 143' TERM
 
   # 前回の残りが別の結果を混ぜないように、開始前にも落としておく。
   docker-compose down --remove-orphans >/dev/null 2>&1 || true
