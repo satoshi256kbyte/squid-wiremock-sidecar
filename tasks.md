@@ -13,6 +13,7 @@ Spec Kitの実行単位は1 Issueとし、Issue一覧、優先度、順番は
 **Description**: 3 service（test-client、squid、wiremock）の定義とネットワーク設定
 
 **Acceptance Criteria**:
+
 - [ ] service 定義: image/ports/environment/volumes
 - [ ] network driver: bridge 指定
 - [ ] health check: 各 service の起動確認
@@ -28,6 +29,7 @@ Spec Kitの実行単位は1 Issueとし、Issue一覧、優先度、順番は
 **Description**: Squid コンテナの作成、基本ルーティング設定（cache_peer、ACL）
 
 **Acceptance Criteria**:
+
 - [ ] Dockerfile: squid:latest ベース、squid.conf をコピー
 - [ ] squid.conf: cache_dir、cache_peer wiremock:8080、acl api_example
 - [ ] http_access ルール: allow api_example
@@ -44,9 +46,10 @@ Spec Kitの実行単位は1 Issueとし、Issue一覧、優先度、順番は
 **Description**: HTTP クライアントの最小実装、HTTP_PROXY 環境変数経由でリクエスト送信
 
 **Acceptance Criteria**:
+
 - [ ] Shell script または Node.js スクリプト
-- [ ] HTTP_PROXY=http://squid:3128 環境変数を読み込み
-- [ ] curl -x $HTTP_PROXY http://api.example.com/api/users でリクエスト送信
+- [ ] `HTTP_PROXY=http://squid:3128` 環境変数を読み込み
+- [ ] `curl -x $HTTP_PROXY http://api.example.com/api/users` でリクエスト送信
 - [ ] レスポンス（status code、body）を出力
 - [ ] docker-compose exec test-client で疎通確認
 
@@ -60,6 +63,7 @@ Spec Kitの実行単位は1 Issueとし、Issue一覧、優先度、順番は
 **Description**: docker-compose up → 3 service 起動 → curl 疎通テスト
 
 **Acceptance Criteria**:
+
 - [ ] docker-compose up -d で 3 service 起動
 - [ ] docker ps で squid、wiremock、test-client がスタート状態
 - [ ] docker-compose logs squid/wiremock で エラーなし
@@ -77,10 +81,11 @@ Spec Kitの実行単位は1 Issueとし、Issue一覧、優先度、順番は
 **Description**: wiremock-scenarios/mappings/ に HTTP 200 OK の mapping 定義
 
 **Acceptance Criteria**:
+
 - [ ] mappings/normal-case.json: GET /api/users/123 → 200 + {"id":123,"name":"John"}
 - [ ] __files/success.json: レスポンス body テンプレート
 - [ ] WireMock ログで mapping 読み込み確認
-- [ ] curl -x http://localhost:3128 http://api.example.com/api/users/123 → 200
+- [ ] `curl -x http://localhost:3128 http://api.example.com/api/users/123` → 200
 
 **Effort**: 0.5h  
 **Assignee**: satoshi
@@ -92,6 +97,7 @@ Spec Kitの実行単位は1 Issueとし、Issue一覧、優先度、順番は
 **Description**: HTTP 500、503、429、及び delay 設定の mapping
 
 **Acceptance Criteria**:
+
 - [ ] mappings/error-500-case.json: GET /api/fail → 500 + {"error":"Internal Server Error"}
 - [ ] mappings/error-503-case.json: GET /api/unavailable → 503 + {"error":"Service Unavailable"}
 - [ ] mappings/error-429-case.json: GET /api/ratelimit → 429 + Retry-After header
@@ -108,7 +114,8 @@ Spec Kitの実行単位は1 Issueとし、Issue一覧、優先度、順番は
 **Description**: Squid logs から cache_peer へのルーティングフロー確認
 
 **Acceptance Criteria**:
-- [ ] curl -x http://localhost:3128 http://api.example.com/api/users → squid access.log に記録
+
+- [ ] `curl -x http://localhost:3128 http://api.example.com/api/users` → squid access.log に記録
 - [ ] access.log に "TCP_TUNNEL_PARENT_HIT" または peer 関連のログ出現
 - [ ] WireMock logs に incoming request 記録
 - [ ] docker-compose logs squid | grep -i "wiremock\|peer" で確認
@@ -123,6 +130,7 @@ Spec Kitの実行単位は1 Issueとし、Issue一覧、優先度、順番は
 **Description**: WireMock mappings・__files を volume として mount
 
 **Acceptance Criteria**:
+
 - [ ] wiremock service: volumes: - ./wiremock-scenarios:/home/wiremock
 - [ ] WireMock start log に "Loaded mappings from ..." 出現
 - [ ] mapping 追加後 docker-compose restart wiremock で新規定義反映
@@ -140,6 +148,7 @@ Spec Kitの実行単位は1 Issueとし、Issue一覧、優先度、順番は
 **Description**: HTTP 500/503 時の自動リトライ（exponential backoff）
 
 **Acceptance Criteria**:
+
 - [ ] test-client/client.js: retry 関数（最大 3 回、初回 1s、次回 2s、3 回目 4s）
 - [ ] HTTP 500/503 → リトライ、その他エラー → 即失敗
 - [ ] success 時は immediate return
@@ -156,6 +165,7 @@ Spec Kitの実行単位は1 Issueとし、Issue一覧、優先度、順番は
 **Description**: Jest/Mocha を使用した E2E テストケース定義
 
 **Acceptance Criteria**:
+
 - [ ] tests/e2e.test.js 実装
 - [ ] test_normal_case: GET /api/users/123 → 200 OK
 - [ ] test_error_500_retry: GET /api/fail → 500 → リトライ → 200 OK
@@ -173,6 +183,7 @@ Spec Kitの実行単位は1 Issueとし、Issue一覧、優先度、順番は
 **Description**: テストシナリオごとの WireMock mapping セット管理
 
 **Acceptance Criteria**:
+
 - [ ] tests/fixtures/ に scenario-normal.json、scenario-errors.json など配置
 - [ ] setup hook: docker-compose down → up、fixtures copy
 - [ ] teardown hook: docker-compose down、cleanup
@@ -188,6 +199,7 @@ Spec Kitの実行単位は1 Issueとし、Issue一覧、優先度、順番は
 **Description**: pnpm 実行スクリプトの整備
 
 **Acceptance Criteria**:
+
 - [ ] pnpm start: docker-compose up -d
 - [ ] pnpm stop: docker-compose down
 - [ ] pnpm test: jest/mocha で E2E テスト実行
@@ -206,6 +218,7 @@ Spec Kitの実行単位は1 Issueとし、Issue一覧、優先度、順番は
 **Description**: PR/push 時の E2E テスト自動実行
 
 **Acceptance Criteria**:
+
 - [ ] .github/workflows/e2e-test.yml: ubuntu-latest 上での実行
 - [ ] docker-compose up -d → pnpm test → docker-compose down
 - [ ] 実行時間: < 3 分
@@ -222,6 +235,7 @@ Spec Kitの実行単位は1 Issueとし、Issue一覧、優先度、順番は
 **Description**: ローカル・CI セットアップ手順ドキュメント
 
 **Acceptance Criteria**:
+
 - [ ] Prerequisites: Docker/Docker Compose、Node.js、curl
 - [ ] ローカル: colima status → export DOCKER_HOST → docker-compose up
 - [ ] CI: GitHub Actions runner（ubuntu-latest）での実行手順
@@ -238,6 +252,7 @@ Spec Kitの実行単位は1 Issueとし、Issue一覧、優先度、順番は
 **Description**: プロジェクト全体の使用方法・概要
 
 **Acceptance Criteria**:
+
 - [ ] Project Overview（背景・目的）
 - [ ] Quick Start: pnpm start → pnpm test
 - [ ] Architecture Diagram（テキスト形式）
@@ -256,6 +271,7 @@ Spec Kitの実行単位は1 Issueとし、Issue一覧、優先度、順番は
 **Description**: ローカル + CI 環境での最終動作確認
 
 **Acceptance Criteria**:
+
 - [ ] ローカル（Colima）: pnpm test 全通過
 - [ ] CI PR: .github/workflows/e2e-test.yml 成功
 - [ ] docker-compose logs で エラーなし（warnings は許容）
@@ -276,7 +292,7 @@ Spec Kitの実行単位は1 Issueとし、Issue一覧、優先度、順番は
 
 ## Dependencies
 
-```
+```text
 T1-1 ──→ T1-2 ──→ T1-3 ──→ T1-4
               ↓
          T2-1, T2-2

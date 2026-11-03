@@ -94,7 +94,7 @@
 
 ### 4.1 Functional Coverage
 
-```
+```text
 ✅ F1: ECS Sidecar Emulation
    └─ Spec:    docker-compose 3-service structure
    └─ Plan:    bridge network, localhost emulation
@@ -127,7 +127,7 @@
 
 ### 4.2 Non-Functional Coverage
 
-```
+```text
 ✅ NF1: Portability
    └─ Tasks:   T1-4 (local Colima), T4-1 (GitHub Actions)
    └─ Coverage: Local + CI both passing
@@ -159,7 +159,7 @@
 
 ### 5.2 Timeline (1 week, 5 days)
 
-```
+```text
 Day 1 (Mon):  Phase 1 (T1-1～T1-4, 3.5h)
 Day 2 (Tue):  Phase 2 Part 1 (T2-1, T2-2, 1.5h) + Phase 3 parallel (T3-1, 1h)
 Day 3 (Wed):  Phase 2 Part 2 (T2-3, T2-4, 0.75h) + Phase 3 (T3-2, T3-3, 2h)
@@ -202,7 +202,7 @@ Day 5 (Fri):  Phase 4 finish (T4-3, T4-4, 1h) + Integration test
 
 ## 7. Critical Path Analysis
 
-```
+```text
 Critical Path: T1-1 → T1-2 → T2-1 → T2-2 → T2-4 → T3-1 → T3-2 → T4-1 → T4-4
                (0.25h + 1.5h + 0.5h + 1h + 0.25h + 1h + 1.5h + 0.75h + 0.5h)
                = 7.25h (62% of total)
@@ -257,7 +257,7 @@ Parallel Opportunities:
 
 ### Overall Verdict
 
-**✅ APPROVED FOR IMPLEMENTATION**
+✅ APPROVED FOR IMPLEMENTATION
 
 全要件が spec → plan → tasks を通じて完全にトレーサビリティされており、
 技術設計と実装タスクの間にギャップがない。

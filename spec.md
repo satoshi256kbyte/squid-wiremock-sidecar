@@ -23,7 +23,7 @@ Test Client（メインアプリ）→ Squid Proxy（localhost:3128）→ WireMo
 ## 3. Success Criteria
 
 - [ ] docker-compose up で 3 コンポーネント（Client、Proxy、Mock Server）が同時起動
-- [ ] Test Client が HTTP_PROXY=http://localhost:3128 経由で Mock Server と通信
+- [ ] Test Client が `HTTP_PROXY=http://localhost:3128` 経由で Mock Server と通信
 - [ ] WireMock で HTTP 500、503、429 を返却できる
 - [ ] WireMock で response delay（100ms～5s）を設定できる
 - [ ] Squid ルーティングで特定ドメイン（例: api.example.com）の通信が Mock Server に転送される
@@ -33,7 +33,7 @@ Test Client（メインアプリ）→ Squid Proxy（localhost:3128）→ WireMo
 
 ## 4. Architecture
 
-```
+```text
 ┌─────────────────────────────────────────────────────────────┐
 │                 Docker Network (bridge)                     │
 ├─────────────────────────────────────────────────────────────┤
@@ -59,7 +59,7 @@ Test Client（メインアプリ）→ Squid Proxy（localhost:3128）→ WireMo
 
 - **Docker Compose**: service ごとにネットワーク内の独立コンテナとして稼働
   - localhost 通信はコンテナ内に閉じているため、
-    環境変数で明示的にプロキシアドレスを指定（http://squid:3128）
+    環境変数で明示的にプロキシアドレスを指定（`http://squid:3128`）
   - ECS awsvpc モードと異なり、サービス名解決で通信
 
 ### 5.2 Squid 設定
@@ -84,19 +84,23 @@ Test Client（メインアプリ）→ Squid Proxy（localhost:3128）→ WireMo
 ## 6. Implementation Phases
 
 ### Phase 1: Foundation
+
 - docker-compose.yml の基本構造（3 サービス）定義
 - Squid コンテナのビルド（Dockerfile）
 - WireMock の既存イメージ利用
 
 ### Phase 2: Routing & Proxy Config
+
 - squid.conf の cache_peer/acl ルール実装
 - Test Client から Squid 経由でのリクエストフロー検証
 
 ### Phase 3: Mock Scenarios
+
 - WireMock mappings（正常系・エラー系・遅延系）定義
 - E2E テストスイート実装
 
 ### Phase 4: Integration & Polish
+
 - ローカル環境（Colima）での動作確認
 - CI 環境での実行（GitHub Actions）
 - セットアップ・トラブルシューティングガイド作成
