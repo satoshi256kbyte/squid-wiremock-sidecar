@@ -7,7 +7,7 @@ ECS のサイドカー（Squid プロキシ）構成をローカル環境・CI �
 
 **3 層構成:**
 
-```
+```text
 Test Client → Squid Proxy (localhost:3128) → WireMock (Mock Server)
 ```
 
@@ -56,16 +56,19 @@ docker-compose down
 ## System Components
 
 ### Test Client
+
 - HTTP クライアント（リトライロジック付き）
 - HTTP_PROXY 環境変数経由でプロキシを指定
 - テスト用シナリオ実行
 
 ### Squid Proxy
+
 - フォワードプロキシ
 - localhost:3128 でリッスン
 - cache_peer で特定ドメインの通信を WireMock へ転送
 
 ### WireMock Mock Server
+
 - REST API mock server（localhost:8080）
 - JSON で request/response をコード化
 - HTTP status、delay、headers をカスタマイズ可能
@@ -81,7 +84,7 @@ docker-compose down
 
 ## Directory Structure
 
-```
+```text
 .
 ├── README.md
 ├── spec.md                    # 仕様書
@@ -172,4 +175,4 @@ MIT
 
 ## Contact
 
-Developed by satoshi.kaneyasu@serverworks.co.jp
+Developed by <satoshi.kaneyasu@serverworks.co.jp>

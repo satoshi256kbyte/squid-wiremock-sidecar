@@ -39,7 +39,7 @@ Test Client のビルドイメージのみ Dockerfile で管理。
 
 ### 2.1 ディレクトリ構成
 
-```
+```text
 squid-wiremock-sidecar/
 ├── docker-compose.yml
 ├── .dockerignore
@@ -82,7 +82,7 @@ squid-wiremock-sidecar/
 
 | Service | Port | Image | Environment |
 |---------|------|-------|-------------|
-| test-client | - | Dockerfile | HTTP_PROXY=http://squid:3128 |
+| test-client | - | Dockerfile | `HTTP_PROXY=http://squid:3128` |
 | squid | 3128 | squid:latest | - |
 | wiremock | 8080 | wiremock/wiremock | - |
 
@@ -152,14 +152,14 @@ cache_log /var/log/squid/cache.log
 1. docker-compose.yml: 3 service 基本構造
 2. Squid Dockerfile + squid.conf（基本ルーティング）
 3. Test Client: curl ベースの簡易実装（node.js 不要）
-4. 疎通確認: curl -x http://localhost:3128 http://api.example.com
+4. 疎通確認: `curl -x http://localhost:3128 http://api.example.com`
 
 ### Phase 2: WireMock Integration
 
 1. wiremock-scenarios/mappings/ へ JSON スタブ定義
 2. docker-compose.yml で volumes マウント
 3. WireMock 管理 API（POST /__admin/mappings）テスト
-4. curl -x http://localhost:3128 http://api.example.com/api/users → 200 OK
+4. `curl -x http://localhost:3128 http://api.example.com/api/users` → 200 OK
 
 ### Phase 3: Test Suite & Scenarios
 

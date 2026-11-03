@@ -1,0 +1,14 @@
+{
+  "name": "squid-wiremock-sidecar",
+  "private": true,
+  "description": "ECSサイドカー型E2Eテスト基盤のドキュメント検査用設定",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "lint:md": "markdownlint-cli2 \"**/*.md\" \"#node_modules\""
+  },
+  "devDependencies": {
+    "markdownlint-cli2": "0.24.0"
+  }
+}
