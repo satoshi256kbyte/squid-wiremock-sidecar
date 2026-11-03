@@ -1,4 +1,5 @@
 {
+  "name": "slow-100",
   "request": {
     "method": "GET",
     "urlPath": "/api/slow-100"

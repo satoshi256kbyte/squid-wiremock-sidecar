@@ -1,4 +1,5 @@
 {
+  "name": "normal",
   "request": {
     "method": "GET",
     "urlPath": "/api/users/123"

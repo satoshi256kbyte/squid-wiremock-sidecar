@@ -1,0 +1,16 @@
+{
+  "name": "error-500-then-200",
+  "scenarioName": "error-500-then-200",
+  "requiredScenarioState": "Succeeded",
+  "request": {
+    "method": "GET",
+    "urlPath": "/api/error-500-then-200"
+  },
+  "response": {
+    "status": 200,
+    "bodyFileName": "success.json",
+    "headers": {
+      "Content-Type": "application/json"
+    }
+  }
+}
