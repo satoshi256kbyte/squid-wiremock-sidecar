@@ -1,0 +1,14 @@
+{
+  "request": {
+    "method": "GET",
+    "urlPath": "/api/ratelimit"
+  },
+  "response": {
+    "status": 429,
+    "bodyFileName": "error-429.json",
+    "headers": {
+      "Content-Type": "application/json",
+      "Retry-After": "2"
+    }
+  }
+}

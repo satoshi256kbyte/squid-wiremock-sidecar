@@ -1,0 +1,13 @@
+{
+  "request": {
+    "method": "GET",
+    "urlPath": "/api/error-500"
+  },
+  "response": {
+    "status": 500,
+    "bodyFileName": "error-500.json",
+    "headers": {
+      "Content-Type": "application/json"
+    }
+  }
+}

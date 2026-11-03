@@ -1,0 +1,14 @@
+{
+  "request": {
+    "method": "GET",
+    "urlPath": "/api/slow-5000"
+  },
+  "response": {
+    "status": 200,
+    "bodyFileName": "slow.json",
+    "fixedDelayMilliseconds": 5000,
+    "headers": {
+      "Content-Type": "application/json"
+    }
+  }
+}
