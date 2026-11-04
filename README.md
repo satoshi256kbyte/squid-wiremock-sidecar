@@ -86,6 +86,8 @@ docker-compose down
 
 シナリオの名前による選択、リセット、追加手順、並列実行の禁止は [シナリオの隔離と追加](docs/シナリオ隔離.md) を参照。
 
+E2E スイートの実行方法、4シナリオの期待値、失敗時の見方は [E2Eテスト](docs/E2Eテスト.md) を参照。
+
 ## Directory Structure
 
 ```text

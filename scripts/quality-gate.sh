@@ -71,7 +71,7 @@ if has_match '^(docker-compose\.yml|Dockerfile|squid-config/|wiremock-scenarios/
   # M02は稼働中のスタックを前提とし、ゲートから起動するとWireMockへ接続できず失敗するため、
   # AGENTS.mdの方針どおり個別に実行する。
   printf '%s\n' 'NOTE: tests/m02-routing-smoke.sh は稼働中のスタックが必要なため、ゲートでは実行しない'
-  for test in tests/m03-wiremock-scenarios.sh tests/m04-test-client.sh tests/m05-proxy-integration.sh tests/m06-client-resilience.sh tests/m07-scenario-isolation.sh tests/s14-compose-port-binding.sh; do
+  for test in tests/m03-wiremock-scenarios.sh tests/m04-test-client.sh tests/m05-proxy-integration.sh tests/m06-client-resilience.sh tests/m07-scenario-isolation.sh tests/m08-e2e-suite.sh tests/s14-compose-port-binding.sh; do
     [ -f "$test" ] || continue
     if has_match "^$test\$|^(docker-compose\.yml|Dockerfile|squid-config/|wiremock-scenarios/|test-client/|scripts/scenario-lib\.sh)"; then
       run sh "$test"
@@ -79,6 +79,11 @@ if has_match '^(docker-compose\.yml|Dockerfile|squid-config/|wiremock-scenarios/
   done
   if [ -n "$(docker-compose ps -aq 2>/dev/null || true)" ]; then
     printf 'FAILED: 統合テスト後にコンテナが残っている\n' >&2
+    status=1
+  fi
+  # M08 は m08-e2e プロジェクトで動くため、既定のプロジェクトだけでは残りを見逃す。
+  if [ -n "$(COMPOSE_PROJECT_NAME=m08-e2e docker-compose ps -aq 2>/dev/null || true)" ]; then
+    printf 'FAILED: M08 のコンテナ（m08-e2e）が残っている\n' >&2
     status=1
   fi
 fi
