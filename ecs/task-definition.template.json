@@ -1,0 +1,35 @@
+{
+  "family": "swsc-e2e",
+  "networkMode": "awsvpc",
+  "requiresCompatibilities": ["FARGATE"],
+  "cpu": "512",
+  "memory": "1024",
+  "containerDefinitions": [
+    {
+      "name": "client",
+      "image": "{{CLIENT_IMAGE}}",
+      "essential": false,
+      "environment": [
+        { "name": "HTTP_PROXY", "value": "http://127.0.0.1:3128" },
+        { "name": "HTTPS_PROXY", "value": "http://127.0.0.1:3128" },
+        { "name": "NO_PROXY", "value": "localhost,127.0.0.1" },
+        { "name": "TEST_API_BASE_URL", "value": "http://api.example.com" }
+      ],
+      "dependsOn": [{ "containerName": "squid", "condition": "HEALTHY" }]
+    },
+    {
+      "name": "squid",
+      "image": "{{SQUID_IMAGE}}",
+      "essential": true,
+      "environment": [{ "name": "SQUID_UPSTREAM", "value": "{{SQUID_UPSTREAM}}" }],
+      "portMappings": [{ "containerPort": 3128, "protocol": "tcp" }],
+      "healthCheck": {
+        "command": ["CMD-SHELL", "kill -0 1"],
+        "interval": 5,
+        "timeout": 3,
+        "retries": 5,
+        "startPeriod": 10
+      }
+    }
+  ]
+}

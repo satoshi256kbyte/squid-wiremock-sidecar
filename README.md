@@ -43,14 +43,14 @@ Test Client → Squid Proxy (localhost:3128) → WireMock (Mock Server)
 git clone https://github.com/yourusername/squid-wiremock-sidecar.git
 cd squid-wiremock-sidecar
 
-# 2. Docker Compose で環境構築（実装後）
-docker-compose up -d
+# 2. 環境構築と E2E テスト実行（npm run。手順は docs/ローカル実行とCI.md）
+npm run start
 
-# 3. E2E テスト実行（M09 実装後に提供予定）
-pnpm test
+# 3. E2E テスト実行
+npm run test
 
 # 4. 環境破棄
-docker-compose down
+npm run stop
 ```
 
 ## System Components
@@ -152,9 +152,11 @@ E2E スイートの実行方法、4シナリオの期待値、失敗時の見方
 
 ## Development Workflow
 
-以下の pnpm 入口は M09 実装後に提供予定であり、現時点では利用できません。
+下の「旧 Compose 手順」の pnpm 入口は提供しません（移行完了後に、手順ごと削除する）。
+現在の入口は、次の「新基盤の実行（npm run）」です。
 
 ```bash
+# 旧 Compose 手順（移行完了後に削除する）
 # ローカルテスト（Colima 環境）
 export DOCKER_HOST=unix:///Users/satoshi/.colima/default/docker.sock
 pnpm start           # docker-compose up -d
@@ -164,12 +166,26 @@ pnpm stop            # docker-compose down
 pnpm clean           # リソース完全削除
 ```
 
+### 新基盤の実行（npm run）
+
+ローカルの実行手順、検査の層、CI の見方は [ローカル実行とCI](docs/ローカル実行とCI.md) を参照する。
+
+```bash
+npm run start      # WireMock、pause、Squid を起動する
+npm run test       # Client を実行して検査する
+npm run logs       # コンテナのログを表示する
+npm run stop       # 起動したコンテナとネットワークを削除する
+npm run clean      # stop に加えて生成物と収集ログを削除する
+npm run test:ci    # start、test、collect、stop を続けて実行する
+```
+
 ## CI/CD Integration
 
-M09 実装後は、GitHub Actions workflow（`.github/workflows/e2e-test.yml`）により、
-PR/push 時に自動的に E2E テストを実行する予定です。
+GitHub Actions workflow（`.github/workflows/e2e-test.yml`）により、
+PR/push 時に自動的に E2E テストを実行する。実行の順序と見方は
+[ローカル実行とCI](docs/ローカル実行とCI.md) を参照する。
 
-実行時間の目標: < 3 分
+実行時間の目標: < 3 分（CI の初回実行で実測し、文書に反映する）
 
 ## Troubleshooting
 

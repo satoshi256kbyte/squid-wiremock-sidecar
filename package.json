@@ -6,6 +6,12 @@
     "node": ">=22"
   },
   "scripts": {
+    "start": "sh scripts/e2e.sh start",
+    "test": "sh scripts/e2e.sh test",
+    "logs": "sh scripts/e2e.sh logs",
+    "stop": "sh scripts/e2e.sh stop",
+    "clean": "sh scripts/e2e.sh clean",
+    "test:ci": "sh scripts/e2e.sh test:ci",
     "lint:md": "markdownlint-cli2 \"**/*.md\" \"#node_modules\""
   },
   "devDependencies": {
