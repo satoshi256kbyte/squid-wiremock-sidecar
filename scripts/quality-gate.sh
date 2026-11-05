@@ -88,6 +88,21 @@ if has_match '^(docker-compose\.yml|Dockerfile|squid-config/|wiremock-scenarios/
   fi
 fi
 
+# M09 の E2E 基盤。unit は Docker と AWS CLI を使わず、smoke は Docker を使うが AWS CLI と認証情報を使わない。
+# Why: tests/m09-execution-and-ci.sh は引数なしだと smoke を既定にするため、既存の for ループに混ぜると
+# モードを明示せずに Docker を使ってしまう。unit と smoke を、この順に別の run で呼ぶ。
+# Why not: contract は、ダミー認証情報の環境変数が要り、エージェントのシェルでは設定できないため登録しない。
+if has_match '^(scripts/e2e|ecs/|tests/m09-execution-and-ci\.sh$|\.github/workflows/e2e-test\.yml$|docs/ローカル実行とCI\.md$|package\.json$|\.gitignore$|squid-config/|test-client/|wiremock-scenarios/|Dockerfile)'; then
+  printf '%s\n' 'NOTE: tests/m09-execution-and-ci.sh contract は利用者の端末と CI だけで実行するため、ゲートでは実行しない'
+  run sh tests/m09-execution-and-ci.sh unit
+  run sh tests/m09-execution-and-ci.sh smoke
+  # Why: smoke の途中で止まると swsc- のコンテナが残るため、既存の M08 と同じく、ブロックの最後に残存を確かめる。
+  if [ -n "$(docker ps -aq --filter label=swsc.managed=true 2>/dev/null || true)" ]; then
+    printf '%s\n' 'FAILED: M09 のコンテナ（swsc-）が残っている' >&2
+    status=1
+  fi
+fi
+
 if [ "$status" -eq 0 ]; then
   printf '%s\n' 'quality-gate: passed'
 else

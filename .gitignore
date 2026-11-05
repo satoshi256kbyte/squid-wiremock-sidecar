@@ -40,3 +40,7 @@ coverage/
 # Docker Compose volumes
 volumes/
 postgres_data/
+
+# M09 ローカル実行（完成版の生成物、収集ログ）
+.e2e/
+e2e-logs/

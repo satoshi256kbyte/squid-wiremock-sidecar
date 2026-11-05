@@ -1,0 +1,62 @@
+# M09 の CI。ローカルと同じ入口（unit、test:ci、smoke、contract）を、同じ順序で実行する。
+# Why not: Secrets は使わない。Secrets を使うと、フォークからの PR に値を渡す経路が生まれるため。
+# このファイルの env に書くのはダミーの値だけで、実 AWS には接続しない（NFR-901、NFR-902）。
+name: e2e-test
+on:
+  pull_request:
+  push:
+    branches: [main]
+# Why not: 権限は読み取りだけにする。このワークフローはリポジトリへ書き込まない。
+permissions:
+  contents: read
+# Why not: main への push まで ref 単位にすると、連続した push で古い実行が取り消される。
+# main は SHA 単位にして、取り消し合わないようにする（NFR-910）。
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event_name == 'pull_request' && github.ref || github.sha }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+# Why not: 既定の認証情報（~/.aws や実 AWS）に頼らない。ダミーの値とリージョンを明示する（FR-905）。
+env:
+  AWS_ACCESS_KEY_ID: test
+  AWS_SECRET_ACCESS_KEY: test
+  AWS_DEFAULT_REGION: ap-northeast-1
+jobs:
+  e2e:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      # Why not: 認証情報を Git の設定に残すと、後のステップで読める。残さない。
+      # Why: アクションはコミット SHA で固定する。タグは付け替えられるため、取得物が変わらないようにする。
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      # Why: ローカルと同じく、unit を test:ci より先に置く。unit が落ちたら Docker は動かさない（FR-914）。
+      - name: unit
+        run: sh tests/m09-execution-and-ci.sh unit
+        timeout-minutes: 3
+      # 起動を含むため10分まで（Q-906）。
+      - name: test-ci
+        run: npm run test:ci
+        timeout-minutes: 10
+      # smoke と contract の値は仮置き。初回の実測で見直す（FR-917）。
+      - name: smoke
+        run: sh tests/m09-execution-and-ci.sh smoke
+        timeout-minutes: 8
+      - name: contract
+        run: sh tests/m09-execution-and-ci.sh contract
+        timeout-minutes: 5
+      # Why: 失敗しても実行する。test:ci の内側で集めた後の二度目で、タイムアウトに備える（3.7）。
+      - name: collect
+        if: always()
+        run: sh scripts/e2e.sh collect
+      # Why not: 成功時も上げると、保存量が増えるだけで調査には要らない。失敗時の収集物だけを残す（FR-916）。
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: failure()
+        with:
+          name: e2e-logs-${{ github.run_id }}-${{ github.run_attempt }}
+          path: e2e-logs/
+          retention-days: 7
+          if-no-files-found: warn
+      # Why: 後処理は必ず行う。残ったコンテナが次の実行の 8080 を塞ぐのを防ぐ（FR-911）。
+      - name: stop
+        if: always()
+        run: npm run stop
