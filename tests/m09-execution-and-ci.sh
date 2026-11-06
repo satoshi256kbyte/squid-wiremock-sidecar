@@ -62,6 +62,8 @@ check() { # 名前 関数
   # Why: 検査どうしで作業ファイルを共有すると、前の検査の出力が後の「無いこと」の検査を壊すため、
   # 検査ごとに作業場所を空にする（偽の呼び出し記録も含む）。
   find "$TMP" -mindepth 1 -maxdepth 1 ! -name case.log -exec rm -rf {} +
+  # Why: ロックの取り残しが次の検査に混ざると、順序の検査が原因の分からない形で落ちるため、検査ごとに消す。
+  if [ -n "${UNIT_LOCK_BASE:-}" ]; then find "$UNIT_LOCK_BASE" -mindepth 1 -delete; fi
   if ("$@") >"$TMP/case.log" 2>&1; then
     printf 'ok: %s\n' "$_name"
   else
@@ -74,7 +76,7 @@ check() { # 名前 関数
 # 必要なツールだけを束ねたPATHを作る。docker、aws、docker-compose は含めない。
 make_base_bin() { # 出力先
   mkdir -p "$1"
-  for _t in sh env python3 curl grep sed awk cat cp mv rm mkdir chmod cmp diff sort head tail tr wc dirname basename ls find mktemp sleep date; do
+  for _t in sh env python3 curl grep sed awk cat cp mv rm rmdir mkdir chmod cmp diff sort head tail tr wc dirname basename ls find mktemp sleep date; do
     _p=$(command -v "$_t" 2>/dev/null || true)
     case $_p in
       /*) ln -sf "$_p" "$1/$_t" ;;
@@ -113,7 +115,7 @@ no_calls() { # 記録が空、または無いこと
 run_e2e() { # PATH 操作...
   _p=$1
   shift
-  env -i PATH="$_p" HOME="$TMP" sh "$ROOT/scripts/e2e.sh" "$@"
+  env -i PATH="$_p" HOME="$TMP" SWSC_LOCK_DIR="$UNIT_LOCK" sh "$ROOT/scripts/e2e.sh" "$@"
 }
 
 # ---------------------------------------------------------------------------
@@ -172,7 +174,7 @@ t_contract_without_credentials_stops_before_docker_and_aws() {
   make_base_bin "$TMP/base"
   make_shims "$TMP/shim"
   _r=0
-  env -i PATH="$TMP/shim:$TMP/base" HOME="$TMP" sh "$ROOT/scripts/e2e.sh" contract \
+  env -i PATH="$TMP/shim:$TMP/base" HOME="$TMP" SWSC_LOCK_DIR="$UNIT_LOCK" sh "$ROOT/scripts/e2e.sh" contract \
     >/dev/null 2>"$TMP/err" || _r=$?
   must [ "$_r" -eq 1 ]
   must grep -q 'AWS_ACCESS_KEY_ID' "$TMP/err"
@@ -184,7 +186,7 @@ t_contract_rejects_non_dummy_credentials() {
   make_base_bin "$TMP/base"
   make_shims "$TMP/shim"
   _r=0
-  env -i PATH="$TMP/shim:$TMP/base" HOME="$TMP" \
+  env -i PATH="$TMP/shim:$TMP/base" HOME="$TMP" SWSC_LOCK_DIR="$UNIT_LOCK" \
     AWS_ACCESS_KEY_ID=other AWS_SECRET_ACCESS_KEY=test \
     sh "$ROOT/scripts/e2e.sh" contract >/dev/null 2>"$TMP/err" || _r=$?
   must [ "$_r" -eq 1 ]
@@ -196,7 +198,7 @@ t_contract_rejects_aws_profile() {
   make_base_bin "$TMP/base"
   make_shims "$TMP/shim"
   _r=0
-  env -i PATH="$TMP/shim:$TMP/base" HOME="$TMP" \
+  env -i PATH="$TMP/shim:$TMP/base" HOME="$TMP" SWSC_LOCK_DIR="$UNIT_LOCK" \
     AWS_ACCESS_KEY_ID=test AWS_SECRET_ACCESS_KEY=test AWS_PROFILE=dev \
     sh "$ROOT/scripts/e2e.sh" contract >/dev/null 2>"$TMP/err" || _r=$?
   must [ "$_r" -eq 1 ]
@@ -737,7 +739,7 @@ contract_setup() {
 # Why: 実際の docker と aws に触れず、利用者の AWS 設定を混ぜないため。出力先も一時領域へ向ける。
 contract_run() { # 本体
   env -i PATH="$TMP/cfake:$TMP/cbase" HOME="$TMP" SWSC_ROOT="$ROOT" SWSC_E2E_DIR="$TMP/e2e" \
-    SWSC_LOG_DIR="$TMP/logs" \
+    SWSC_LOCK_DIR="$UNIT_LOCK" SWSC_LOG_DIR="$TMP/logs" \
     SWSC_TEST_DIR="$TMP" SWSC_TEST_SEQ="$TMP/seq.log" SWSC_CONTRACT_WAIT_SECONDS=1 \
     AWS_ACCESS_KEY_ID=test AWS_SECRET_ACCESS_KEY=test \
     sh -c '. "$SWSC_ROOT/scripts/e2e-lib.sh"; . "$SWSC_ROOT/scripts/e2e-contract.sh"; eval "$1"' sh "$1"
@@ -896,7 +898,7 @@ t_contract_with_dummy_credentials_removes_old_ministack_first() {
   make_base_bin "$TMP/base"
   make_shims "$TMP/shim"
   _r=0
-  env -i PATH="$TMP/shim:$TMP/base" HOME="$TMP" SWSC_E2E_DIR="$TMP/e2e" SWSC_LOG_DIR="$TMP/logs" \
+  env -i PATH="$TMP/shim:$TMP/base" HOME="$TMP" SWSC_LOCK_DIR="$UNIT_LOCK" SWSC_E2E_DIR="$TMP/e2e" SWSC_LOG_DIR="$TMP/logs" \
     AWS_ACCESS_KEY_ID=test AWS_SECRET_ACCESS_KEY=test \
     sh "$ROOT/scripts/e2e.sh" contract >/dev/null 2>"$TMP/err" || _r=$?
   # 前提は通り、最初の docker の呼び出しは、名前の完全一致とラベルで絞った自分の MiniStack の検索である。
@@ -1155,7 +1157,7 @@ runner_setup() {
 # 偽のPATHで、ランナーを読み込んだ子シェルに本体を評価させる。
 # Why: 実際の docker と curl に触れず、利用者の AWS 設定や環境変数を検査に混ぜないため。
 runner_run() { # 本体
-  env -i PATH="$TMP/rfake:$TMP/rbase" HOME="$TMP" SWSC_ROOT="$ROOT" SWSC_TEST_DIR="$TMP" \
+  env -i PATH="$TMP/rfake:$TMP/rbase" HOME="$TMP" SWSC_ROOT="$ROOT" SWSC_TEST_DIR="$TMP" SWSC_LOCK_DIR="$UNIT_LOCK" \
     SWSC_TEST_SEQ="$TMP/seq.log" SWSC_WAIT_SECONDS=2 \
     sh -c '. "$SWSC_ROOT/scripts/e2e-lib.sh"; . "$SWSC_ROOT/scripts/e2e-runner.sh"; eval "$1"' sh "$1"
 }
@@ -1491,14 +1493,14 @@ entry_setup() {
 
 # scripts/e2e.sh を、偽の PATH と空の環境で実行する。出力先は一時領域へ向ける。
 entry_run() { # 操作...
-  env -i PATH="$TMP/efake:$TMP/ebase" HOME="$TMP" SWSC_E2E_DIR="$TMP/e2e" SWSC_LOG_DIR="$TMP/logs" \
+  env -i PATH="$TMP/efake:$TMP/ebase" HOME="$TMP" SWSC_LOCK_DIR="$UNIT_LOCK" SWSC_E2E_DIR="$TMP/e2e" SWSC_LOG_DIR="$TMP/logs" \
     SWSC_TEST_DIR="$TMP" SWSC_TEST_SEQ="$TMP/seq.log" SWSC_WAIT_SECONDS=2 SWSC_CONTRACT_WAIT_SECONDS=1 \
     sh "$ROOT/scripts/e2e.sh" "$@"
 }
 
 # e2e-lib.sh と e2e-runner.sh を読み込んだ子シェルで、与えた文を評価する。関数の差し替えに使う。
 lib_call() { # 文
-  env -i PATH="$TMP/efake:$TMP/ebase" HOME="$TMP" SWSC_ROOT="$ROOT" SWSC_E2E_DIR="$TMP/e2e" \
+  env -i PATH="$TMP/efake:$TMP/ebase" HOME="$TMP" SWSC_ROOT="$ROOT" SWSC_LOCK_DIR="$UNIT_LOCK" SWSC_E2E_DIR="$TMP/e2e" \
     SWSC_LOG_DIR="$TMP/logs" SWSC_TEST_DIR="$TMP" SWSC_TEST_SEQ="$TMP/seq.log" SWSC_WAIT_SECONDS=2 \
     sh -c '. "$SWSC_ROOT/scripts/e2e-lib.sh"; . "$SWSC_ROOT/scripts/e2e-runner.sh"; eval "$1"' sh "$1"
 }
@@ -2904,9 +2906,497 @@ t_gate_existing_compose_condition_and_note_are_unchanged() {
   must grep -Fxq "  printf '%s\n' 'NOTE: tests/m02-routing-smoke.sh は稼働中のスタックが必要なため、ゲートでは実行しない'" "$_gf"
 }
 
+# T2601: ロックとポート確認の検査。ロックは実行専用の一時ディレクトリだけに置く。
+# Why: 実ホストの既定のロック（/tmp/swsc-e2e-ports.lock）を検査が作ると、利用中のロックと衝突するため。
+lock_case_dir() {
+  _lb=${KIROCREW_SCRATCH:-$TMP}
+  mkdir -p "$_lb" || return 1
+  mktemp -d "$_lb/swsc-lock-case.XXXXXX"
+}
+
+# 検査の後始末。rm -rf を使わず、検査が作った中身だけを消してから空の場所を消す。
+lock_case_clear() { # ディレクトリ
+  find "$1" -mindepth 1 -delete
+  rmdir "$1"
+}
+
+t_lock_acquire_busy() {
+  _d=$(lock_case_dir) || return 1
+  _lock=$_d/ports.lock
+  ( SWSC_LOCK_DIR=$_lock; . "$ROOT/scripts/e2e-lib.sh"; swsc_lock_acquire ) || return 1
+  must grep -Fxq "$$" "$_lock/owner"
+  if ( SWSC_LOCK_DIR=$_lock; . "$ROOT/scripts/e2e-lib.sh"; swsc_lock_acquire ) 2>"$TMP/busy.err"; then
+    return 1
+  fi
+  must grep -Fq 'ls -ld' "$TMP/busy.err"
+  must grep -Fq 'rmdir' "$TMP/busy.err"
+  must grep -Fq "$$" "$TMP/busy.err"
+  must [ -f "$_lock/owner" ]
+  lock_case_clear "$_d"
+}
+
+t_lock_release_non_owner() {
+  _d=$(lock_case_dir) || return 1
+  _lock=$_d/ports.lock
+  _lib="$ROOT/scripts/e2e-lib.sh"
+  if ( SWSC_LOCK_DIR=$_lock; . "$_lib"; swsc_lock_release ) >/dev/null 2>&1; then
+    return 1
+  fi
+  ( SWSC_LOCK_DIR=$_lock; . "$_lib"; swsc_lock_acquire ) || return 1
+  printf '%s\n%s\n' 1 'other' >"$_lock/owner"
+  if ( SWSC_LOCK_DIR=$_lock; . "$_lib"; swsc_lock_release ) >/dev/null 2>&1; then
+    return 1
+  fi
+  must [ -d "$_lock" ]
+  must grep -Fxq 1 "$_lock/owner"
+  printf '%s\n%s\n' "$$" 'self' >"$_lock/owner"
+  ( SWSC_LOCK_DIR=$_lock; . "$_lib"; swsc_lock_release ) || return 1
+  must [ ! -e "$_lock" ]
+  lock_case_clear "$_d"
+}
+
+t_check_ports_free() {
+  _lib="$ROOT/scripts/e2e-lib.sh"
+  ( . "$_lib"; swsc_port_in_use() { return 1; }; swsc_check_ports_free 8080 3128 4566 ) || return 1
+  ( . "$_lib"; swsc_port_in_use() { return 1; }; swsc_check_ports_free 1 65535 ) || return 1
+  _calls=$TMP/calls.log
+  if ( . "$_lib"; swsc_port_in_use() { echo "$1" >>"$_calls"; [ "$1" = 3128 ]; }; swsc_check_ports_free 8080 3128 4566 ) 2>"$TMP/busy.err"; then
+    return 1
+  fi
+  must grep -Fq 3128 "$TMP/busy.err"
+  must [ "$(grep -c '' "$_calls")" -eq 3 ]
+  if ( . "$_lib"; swsc_port_in_use() { return 1; }; swsc_check_ports_free ) >/dev/null 2>&1; then return 1; fi
+  if ( . "$_lib"; swsc_port_in_use() { return 1; }; swsc_check_ports_free '' ) >/dev/null 2>&1; then return 1; fi
+  if ( . "$_lib"; swsc_port_in_use() { return 1; }; swsc_check_ports_free abc ) >/dev/null 2>&1; then return 1; fi
+  if ( . "$_lib"; swsc_port_in_use() { return 1; }; swsc_check_ports_free 0 ) >/dev/null 2>&1; then return 1; fi
+  if ( . "$_lib"; swsc_port_in_use() { return 1; }; swsc_check_ports_free 65536 ) >/dev/null 2>&1; then return 1; fi
+  if ( . "$_lib"; swsc_port_in_use() { return 1; }; swsc_check_ports_free 8080 abc ) >/dev/null 2>&1; then return 1; fi
+}
+
+# T2602: Client の環境変数、WireMock の path 件数、Squid のログ検査。
+# Why: 偽の docker と curl を、検査専用の一時ディレクトリだけに置き、実の Docker と WireMock に触れないようにする。
+t2602_fake_docker() { # 置き場
+  mkdir -p "$1"
+  cat >"$1/docker" <<'EOF'
+#!/bin/sh
+# 呼ばれた引数を1行1要素で記録する。Why: 空白や引用符を含む値が、分かれずに1要素で届いたかを見るため。
+for _a in "$@"; do
+  printf '[%s]\n' "$_a"
+done >>"$SWSC_FAKE_REC"
+if [ "$1" = exec ]; then
+  if [ -n "${SWSC_FAKE_EXEC_FAIL:-}" ]; then
+    echo 'Error: no such container' >&2
+    exit 1
+  fi
+  cat "$SWSC_FAKE_LOG"
+  exit 0
+fi
+echo client-stdout
+echo client-stderr >&2
+exit "${SWSC_FAKE_RC:-0}"
+EOF
+  chmod +x "$1/docker"
+}
+
+t2602_fake_curl() { # 置き場
+  mkdir -p "$1"
+  cat >"$1/curl" <<'EOF'
+#!/bin/sh
+# 応答ファイルの中身を返す。SWSC_FAKE_CURL_FAIL があれば、接続失敗と同じ終了コードで止まる。
+if [ -n "${SWSC_FAKE_CURL_FAIL:-}" ]; then
+  exit 22
+fi
+cat "$SWSC_FAKE_BODY"
+EOF
+  chmod +x "$1/curl"
+}
+
+t_client_once_env_rejects_control() {
+  _d=$(lock_case_dir) || return 1
+  _bin=$_d/bin
+  _run=$_d/run
+  _rec=$_d/rec
+  _url=http://swsc-wiremock:8080/api
+  _lib="$ROOT/scripts/e2e-lib.sh"
+  t2602_fake_docker "$_bin"
+  mkdir -p "$_run"
+  # Why: --label の次の値を URL と取り違えないことを、引数の並びで確かめるため。
+  printf '%s\n' --name swsc-client-R1 swsc-client:e2e --label keep-me >"$_run/swsc-client-R1.args"
+  for _bad in '1ABC=x' 'BAD-NAME=x' '=x' 'NOEQ' "OK=$(printf 'a\nb')" "OK=$(printf 'a\tb')" "OK=$(printf 'a\033b')" "$(printf 'OK\n=x')"; do
+    _rc=0
+    (PATH="$_bin:$PATH"; export SWSC_FAKE_REC="$_rec"; . "$_lib"; swsc_client_once_env "$_run" R1 "$_url" "$_d/out" "$_d/err" "$_bad") >/dev/null 2>&1 || _rc=$?
+    [ "$_rc" -eq 2 ] || return 1
+    [ ! -e "$_rec" ] || return 1
+  done
+  # 前提が足りない（引数が少ない、出力先が空、実行ディレクトリが無い）ときも、docker を呼ばず 2 を返す。
+  _rc=0
+  (PATH="$_bin:$PATH"; export SWSC_FAKE_REC="$_rec"; . "$_lib"; swsc_client_once_env "$_run" R1 "$_url") >/dev/null 2>&1 || _rc=$?
+  [ "$_rc" -eq 2 ] || return 1
+  _rc=0
+  (PATH="$_bin:$PATH"; export SWSC_FAKE_REC="$_rec"; . "$_lib"; swsc_client_once_env "$_run" R1 "$_url" "" "$_d/err") >/dev/null 2>&1 || _rc=$?
+  [ "$_rc" -eq 2 ] || return 1
+  _rc=0
+  (PATH="$_bin:$PATH"; export SWSC_FAKE_REC="$_rec"; . "$_lib"; swsc_client_once_env "$_d/none" R1 "$_url" "$_d/out" "$_d/err") >/dev/null 2>&1 || _rc=$?
+  [ "$_rc" -eq 2 ] || return 1
+  [ ! -e "$_rec" ] || return 1
+  # 正常系。値は空白、引用符、$( ) を含むが、シェルで評価されず1要素で届く。
+  _quoted="NAME_B=say \"hi\" 'x' \$(touch $_d/marker)"
+  _rc=0
+  (PATH="$_bin:$PATH"; export SWSC_FAKE_REC="$_rec"; . "$_lib"; swsc_client_once_env "$_run" R1 "$_url" "$_d/out" "$_d/err" 'NAME_A=x y' "$_quoted" 'EMPTY_OK=' 'EQ=a=b') >/dev/null 2>&1 || _rc=$?
+  [ "$_rc" -eq 0 ] || return 1
+  printf '[%s]\n' run --rm -e 'NAME_A=x y' -e "$_quoted" -e 'EMPTY_OK=' -e 'EQ=a=b' -e "TEST_API_BASE_URL=$_url" \
+    --name swsc-client-R1 swsc-client:e2e --label keep-me >"$_d/expected"
+  cmp -s "$_rec" "$_d/expected" || return 1
+  [ ! -e "$_d/marker" ] || return 1
+  # 標準出力と標準エラーは、別のファイルに分かれて保存される。
+  grep -Fxq client-stdout "$_d/out" || return 1
+  grep -Fxq client-stderr "$_d/err" || return 1
+  if grep -Fq client-stderr "$_d/out"; then return 1; fi
+  if grep -Fq client-stdout "$_d/err"; then return 1; fi
+  # Client の終了コードは、そのまま返す。
+  _rc=0
+  (PATH="$_bin:$PATH"; export SWSC_FAKE_REC="$_rec" SWSC_FAKE_RC=7; . "$_lib"; swsc_client_once_env "$_run" R1 "$_url" "$_d/out" "$_d/err") >/dev/null 2>&1 || _rc=$?
+  [ "$_rc" -eq 7 ] || return 1
+  lock_case_clear "$_d"
+}
+
+t_wiremock_count_path() {
+  _d=$(lock_case_dir) || return 1
+  _bin=$_d/bin
+  _body=$_d/body.json
+  _lib="$ROOT/scripts/e2e-lib.sh"
+  t2602_fake_curl "$_bin"
+  # 応答を書き、経路の件数を求める。結果は _out（標準出力）と _rc（終了コード）へ入れる。
+  _count() { # 応答 経路
+    printf '%s' "$1" >"$_body"
+    _rc=0
+    _out=$( (PATH="$_bin:$PATH"; export SWSC_FAKE_BODY="$_body"; . "$_lib"; swsc_wiremock_count_path "$2") 2>/dev/null) || _rc=$?
+  }
+  # /api/users/123 だけを数える。/api/users/1234、/api/users/123/x、Squid の内部要求は数えない。
+  _a='{"meta":{"total":5},"requests":[{"request":{"url":"/api/users/123"}},{"request":{"url":"/api/users/1234"}},{"request":{"url":"/api/users/123/x"}},{"request":{"url":"/squid-internal-periodic/store_digest"}},{"request":{"url":"/api/users/123"}}]}'
+  _count "$_a" /api/users/123
+  [ "$_rc" -eq 0 ] && [ "$_out" = 2 ] || return 1
+  _count "$_a" /squid-internal-periodic/store_digest
+  [ "$_rc" -eq 0 ] && [ "$_out" = 1 ] || return 1
+  _count "$_a" /api/users/999
+  [ "$_rc" -eq 0 ] && [ "$_out" = 0 ] || return 1
+  # 空のジャーナルは 0 を返す。
+  _count '{"meta":{"total":0},"requests":[]}' /api/users/123
+  [ "$_rc" -eq 0 ] && [ "$_out" = 0 ] || return 1
+  # meta.total と requests[] が食い違う、URL が文字列でない、JSON でない、は数えずに 1。
+  _count '{"meta":{"total":3},"requests":[{"request":{"url":"/api/users/123"}}]}' /api/users/123
+  [ "$_rc" -eq 1 ] || return 1
+  _count '{"meta":{"total":1},"requests":[{"request":{"url":5}}]}' /api/users/123
+  [ "$_rc" -eq 1 ] || return 1
+  _count 'not json' /api/users/123
+  [ "$_rc" -eq 1 ] || return 1
+  # 管理 API の取得に失敗したときは 1。
+  _rc=0
+  (PATH="$_bin:$PATH"; export SWSC_FAKE_BODY="$_body" SWSC_FAKE_CURL_FAIL=1; . "$_lib"; swsc_wiremock_count_path /api/users/123) >/dev/null 2>&1 || _rc=$?
+  [ "$_rc" -eq 1 ] || return 1
+  # 経路は python のコードに埋め込まれず引数で渡る。注入の文字列は一致せず、何も実行されない。
+  _count "$_a" "/api/x'); import os; os.system('touch $_d/marker')"
+  [ "$_rc" -eq 0 ] && [ "$_out" = 0 ] || return 1
+  [ ! -e "$_d/marker" ] || return 1
+  # 経路が無いときは 1。
+  _rc=0
+  (PATH="$_bin:$PATH"; export SWSC_FAKE_BODY="$_body"; . "$_lib"; swsc_wiremock_count_path) >/dev/null 2>&1 || _rc=$?
+  [ "$_rc" -eq 1 ] || return 1
+  lock_case_clear "$_d"
+}
+
+t_squid_log_check() {
+  # Why: 検査が読む access log のパスが、設定ファイルの access_log と同じであることを確かめる。
+  grep -Eq '^access_log /var/log/squid/access.log( |$)' "$ROOT/squid-config/squid.conf" || return 1
+  _d=$(lock_case_dir) || return 1
+  _bin=$_d/bin
+  _rec=$_d/rec
+  _log=$_d/access.log
+  _lib="$ROOT/scripts/e2e-lib.sh"
+  t2602_fake_docker "$_bin"
+  # 記録には * を含まず、$( ) はそのまま文字列として含む。
+  printf 'GET /api/users/123 200 $(touch %s/marker);\n' "$_d" >"$_log"
+  # 検査の1回。結果は _rc（終了コード）と、標準エラーの $_d/err へ入れる。
+  _slog() { # パターン...
+    _rc=0
+    (PATH="$_bin:$PATH"; export SWSC_FAKE_REC="$_rec" SWSC_FAKE_LOG="$_log"; . "$_lib"; swsc_squid_log_check "$@") >/dev/null 2>"$_d/err" || _rc=$?
+  }
+  _slog /api/users/123 200
+  [ "$_rc" -eq 0 ] || return 1
+  grep -Fxq '[swsc-squid]' "$_rec" || return 1
+  grep -Fxq '[/var/log/squid/access.log]' "$_rec" || return 1
+  _slog /api/users/123 /missing
+  [ "$_rc" -eq 1 ] || return 1
+  grep -Fq '一致しない' "$_d/err" || return 1
+  if grep -Fq '取得できない' "$_d/err"; then return 1; fi
+  # パターンは固定文字列。* は一致せず、$( ) はコマンドとして実行されない。
+  _slog '*'
+  [ "$_rc" -eq 1 ] || return 1
+  _slog 'a;b'
+  [ "$_rc" -eq 1 ] || return 1
+  _slog "\$(touch $_d/marker)"
+  [ "$_rc" -eq 0 ] || return 1
+  [ ! -e "$_d/marker" ] || return 1
+  # 引数が無い、空のパターン、改行を含むパターンは 1。
+  _slog
+  [ "$_rc" -eq 1 ] || return 1
+  _slog ''
+  [ "$_rc" -eq 1 ] || return 1
+  _slog "$(printf '200\n/api')"
+  [ "$_rc" -eq 1 ] || return 1
+  # docker exec の失敗は、不一致と区別できる文言で 1 を返す。
+  export SWSC_FAKE_EXEC_FAIL=1
+  _slog /api/users/123
+  unset SWSC_FAKE_EXEC_FAIL
+  [ "$_rc" -eq 1 ] || return 1
+  grep -Fq '取得できない' "$_d/err" || return 1
+  if grep -Fq '一致しない' "$_d/err"; then return 1; fi
+  lock_case_clear "$_d"
+}
+
+# T2603: 管理対象の残存検査と、runner のラベル。
+# 偽の docker は、ラベルで絞った呼び出しと絞らない呼び出しで、返す一覧を変える。
+# Why: 実 docker は label で絞るため、絞らなかった一覧との差で、絞り込みの漏れを検出するため。
+managed_setup() {
+  mkdir -p "$TMP/mbin"
+  cat >"$TMP/mbin/docker" <<'FAKE'
+#!/bin/sh
+echo "docker $*" >>"$SWSC_TEST_DIR/rec-docker"
+if [ -f "$SWSC_TEST_DIR/docker-fail" ]; then exit 1; fi
+case "$*" in
+  *label=swsc.managed=true*) _lab=1 ;;
+  *) _lab=0 ;;
+esac
+case "$1" in
+  ps) if [ "$_lab" = 1 ]; then cat "$SWSC_TEST_DIR/lab-ps" 2>/dev/null; else cat "$SWSC_TEST_DIR/all-ps" 2>/dev/null; fi ;;
+  network) if [ "$_lab" = 1 ]; then cat "$SWSC_TEST_DIR/lab-net" 2>/dev/null; else cat "$SWSC_TEST_DIR/all-net" 2>/dev/null; fi ;;
+esac
+exit 0
+FAKE
+  chmod +x "$TMP/mbin/docker"
+  make_base_bin "$TMP/mbase"
+}
+
+# 残存検査の関数を、偽の docker を入れた PATH で評価する。
+managed_run() { # 本体
+  env -i PATH="$TMP/mbin:$TMP/mbase" HOME="$TMP" SWSC_ROOT="$ROOT" SWSC_TEST_DIR="$TMP" \
+    sh -c '. "$SWSC_ROOT/scripts/e2e-lib.sh"; eval "$1"' sh "$1"
+}
+
+t_managed_empty_passes_when_nothing_is_left() {
+  managed_setup || return 1
+  _rc=0
+  managed_run 'swsc_check_managed_empty' >/dev/null 2>&1 || _rc=$?
+  must [ "$_rc" -eq 0 ]
+}
+
+t_managed_empty_fails_and_names_labelled_prefixed_leftovers() {
+  managed_setup || return 1
+  printf 'swsc-squid\n' >"$TMP/lab-ps"
+  printf 'swsc-net\n' >"$TMP/lab-net"
+  _rc=0
+  managed_run 'swsc_check_managed_empty' >/dev/null 2>"$TMP/err" || _rc=$?
+  must [ "$_rc" -eq 1 ]
+  must grep -Fq 'swsc-squid' "$TMP/err"
+  must grep -Fq 'swsc-net' "$TMP/err"
+}
+
+t_managed_empty_ignores_label_only_and_prefix_only() {
+  managed_setup || return 1
+  printf 'm05-app\n' >"$TMP/lab-ps"
+  printf 'swsc-unlabelled\n' >"$TMP/all-ps"
+  printf 'm05-net\n' >"$TMP/lab-net"
+  printf 'swsc-foreign\n' >"$TMP/all-net"
+  _rc=0
+  managed_run 'swsc_check_managed_empty' >/dev/null 2>&1 || _rc=$?
+  must [ "$_rc" -eq 0 ]
+}
+
+t_managed_empty_docker_failure_is_not_reported_as_empty() {
+  managed_setup || return 1
+  touch "$TMP/docker-fail"
+  _rc=0
+  managed_run 'swsc_check_managed_empty' >/dev/null 2>"$TMP/err" || _rc=$?
+  must [ "$_rc" -eq 1 ]
+  must grep -Fq '確かめられ' "$TMP/err"
+}
+
+t_runner_labels_network_has_prefix_and_label() {
+  runner_setup || return 1
+  runner_run 'swsc_runner_create_network' >/dev/null 2>&1 || return 1
+  must grep -qxF 'docker network create --label swsc.managed=true swsc-net' "$TMP/seq.log"
+}
+
+# T2603: 入口のロックと trap。ロックは検査専用の場所（UNIT_LOCK）にだけ作る。
+# Why: 実ホストの /tmp/swsc-e2e-ports.lock を検査が取ると、利用中の実行と衝突するため。
+# 他者のロックは、取り残しを模して owner を書いた mkdir で作る。
+lock_busy_setup() {
+  mkdir "$UNIT_LOCK" || return 1
+  printf '%s\n%s\n' 99999 other >"$UNIT_LOCK/owner"
+}
+
+t_entry_trap_exit_143_start_refuses_when_locked() {
+  entry_setup || return 1
+  lock_busy_setup || return 1
+  _rc=0
+  lib_call 'swsc_start_main() { echo start >>"$SWSC_TEST_SEQ"; }; swsc_start_op' >/dev/null 2>"$TMP/err" || _rc=$?
+  must [ "$_rc" -eq 1 ]
+  must [ ! -s "$TMP/seq.log" ]
+  must grep -Fq 'ロック' "$TMP/err"
+  must grep -Fxq other "$UNIT_LOCK/owner"
+}
+
+t_entry_trap_exit_143_start_releases_lock_on_success_and_failure() {
+  entry_setup || return 1
+  _rc=0
+  lib_call "$CI_FAKES; swsc_start_op" >/dev/null 2>&1 || _rc=$?
+  must [ "$_rc" -eq 0 ]
+  must [ ! -e "$UNIT_LOCK" ]
+  printf 1 >"$TMP/rc-start"
+  rm -f "$TMP/seq.log"
+  _rc=0
+  lib_call "$CI_FAKES; swsc_start_op" >/dev/null 2>&1 || _rc=$?
+  must [ "$_rc" -eq 1 ]
+  must [ ! -e "$UNIT_LOCK" ]
+  must seq_is "$(printf 'start\nstop')"
+}
+
+t_entry_trap_exit_143_start_term_stops_then_releases_lock() {
+  entry_setup || return 1
+  _rc=0
+  lib_call 'swsc_start_main() { echo start >>"$SWSC_TEST_SEQ"; kill -TERM $$; return 0; }
+swsc_stop() { if [ -d "$SWSC_LOCK_DIR" ]; then echo stop-held >>"$SWSC_TEST_SEQ"; fi; }
+swsc_start_op' >/dev/null 2>&1 || _rc=$?
+  must [ "$_rc" -eq 143 ]
+  must seq_is "$(printf 'start\nstop-held')"
+  must [ ! -e "$UNIT_LOCK" ]
+}
+
+t_entry_trap_exit_143_start_busy_port_creates_nothing_and_releases() {
+  entry_setup || return 1
+  _rc=0
+  lib_call 'swsc_port_in_use() { [ "$1" = 3128 ]; }
+swsc_stop() { echo stop >>"$SWSC_TEST_SEQ"; }
+swsc_build_images() { echo build >>"$SWSC_TEST_SEQ"; }
+swsc_start_op' >/dev/null 2>"$TMP/err" || _rc=$?
+  must [ "$_rc" -eq 1 ]
+  must grep -Fq '3128' "$TMP/err"
+  # Why: 停止は start_main の先頭と、失敗時の後始末で1回ずつ呼ばれる。build には進まない。
+  must seq_is "$(printf 'stop\nstop')"
+  must [ ! -e "$UNIT_LOCK" ]
+}
+
+t_entry_trap_exit_143_test_ci_takes_lock_once_and_releases_after_stop() {
+  entry_setup || return 1
+  _rc=0
+  lib_call 'swsc_start_main() { echo start >>"$SWSC_TEST_SEQ"; if [ "${SWSC_LOCK_HELD:-0}" = 1 ]; then echo held-in-start >>"$SWSC_TEST_SEQ"; fi; return 0; }
+swsc_test_run() { echo test >>"$SWSC_TEST_SEQ"; return 0; }
+swsc_collect() { echo collect >>"$SWSC_TEST_SEQ"; return 0; }
+swsc_stop() { if [ -d "$SWSC_LOCK_DIR" ]; then echo stop-held >>"$SWSC_TEST_SEQ"; fi; }
+swsc_test_ci_main' >/dev/null 2>&1 || _rc=$?
+  must [ "$_rc" -eq 0 ]
+  must seq_is "$(printf 'start\nheld-in-start\ntest\ncollect\nstop-held')"
+  must [ ! -e "$UNIT_LOCK" ]
+}
+
+t_entry_trap_exit_143_test_ci_refuses_when_locked() {
+  entry_setup || return 1
+  lock_busy_setup || return 1
+  _rc=0
+  lib_call "$CI_FAKES; swsc_test_ci_main" >/dev/null 2>&1 || _rc=$?
+  must [ "$_rc" -eq 1 ]
+  must [ ! -s "$TMP/seq.log" ]
+  must grep -Fxq other "$UNIT_LOCK/owner"
+}
+
+t_entry_trap_exit_143_test_ci_int_releases_after_stop() {
+  entry_setup || return 1
+  _rc=0
+  lib_call 'swsc_start_main() { echo start >>"$SWSC_TEST_SEQ"; kill -INT $$; return 0; }
+swsc_collect() { echo collect >>"$SWSC_TEST_SEQ"; }
+swsc_stop() { if [ -d "$SWSC_LOCK_DIR" ]; then echo stop-held >>"$SWSC_TEST_SEQ"; fi; }
+swsc_test_ci_main' >/dev/null 2>&1 || _rc=$?
+  must [ "$_rc" -eq 130 ]
+  must seq_is "$(printf 'start\ncollect\nstop-held')"
+  must [ ! -e "$UNIT_LOCK" ]
+}
+
+t_entry_trap_exit_143_test_ci_term_releases_after_stop() {
+  entry_setup || return 1
+  _rc=0
+  lib_call 'swsc_start_main() { echo start >>"$SWSC_TEST_SEQ"; kill -TERM $$; return 0; }
+swsc_collect() { echo collect >>"$SWSC_TEST_SEQ"; }
+swsc_stop() { if [ -d "$SWSC_LOCK_DIR" ]; then echo stop-held >>"$SWSC_TEST_SEQ"; fi; }
+swsc_test_ci_main' >/dev/null 2>&1 || _rc=$?
+  must [ "$_rc" -eq 143 ]
+  must seq_is "$(printf 'start\ncollect\nstop-held')"
+  must [ ! -e "$UNIT_LOCK" ]
+}
+
+t_entry_trap_exit_143_test_op_term_releases_lock() {
+  entry_setup || return 1
+  _rc=0
+  lib_call 'swsc_test_run() { echo test >>"$SWSC_TEST_SEQ"; kill -TERM $$; return 0; }
+swsc_stop() { if [ -d "$SWSC_LOCK_DIR" ]; then echo stop-held >>"$SWSC_TEST_SEQ"; fi; }
+swsc_test_op' >/dev/null 2>&1 || _rc=$?
+  must [ "$_rc" -eq 143 ]
+  must seq_is "$(printf 'test\nstop-held')"
+  must [ ! -e "$UNIT_LOCK" ]
+}
+
+t_entry_trap_exit_143_test_op_refuses_when_locked() {
+  entry_setup || return 1
+  lock_busy_setup || return 1
+  _rc=0
+  lib_call "$CI_FAKES; swsc_test_op" >/dev/null 2>&1 || _rc=$?
+  must [ "$_rc" -eq 1 ]
+  must [ ! -s "$TMP/seq.log" ]
+  must grep -Fxq other "$UNIT_LOCK/owner"
+}
+
+# stop、clean、logs は、ロックが残っていても動き、ロックには触れない。
+t_entry_trap_exit_143_stop_clean_logs_ignore_lock() {
+  entry_setup || return 1
+  lock_busy_setup || return 1
+  entry_run stop >/dev/null 2>&1 || return 1
+  entry_run clean >/dev/null 2>&1 || return 1
+  entry_run logs squid >/dev/null 2>&1 || return 1
+  must grep -Fxq other "$UNIT_LOCK/owner"
+}
+
+t_entry_trap_exit_143_contract_refuses_busy_4566_and_releases() {
+  contract_setup || return 1
+  contract_go 'swsc_port_in_use() { [ "$1" = 4566 ]; }; swsc_collect() { :; }; contract_main'
+  must [ "$RC" -eq 1 ]
+  must [ -z "$(seq_line 'docker run')" ]
+  must [ -z "$(seq_line 'aws ')" ]
+  must [ ! -e "$UNIT_LOCK" ]
+}
+
+t_entry_trap_exit_143_contract_refuses_when_locked() {
+  contract_setup || return 1
+  lock_busy_setup || return 1
+  contract_go "$CONTRACT_FREE; swsc_collect() { :; }; contract_main"
+  must [ "$RC" -eq 1 ]
+  must [ -z "$(seq_line 'docker run')" ]
+  must [ -z "$(seq_line 'aws ')" ]
+  must grep -Fxq other "$UNIT_LOCK/owner"
+}
+
+t_entry_trap_exit_143_contract_term_releases_lock() {
+  contract_setup || return 1
+  contract_go "$CONTRACT_FREE; swsc_contract_wait_ready() { if [ -d \"\$SWSC_LOCK_DIR\" ]; then echo held >>\"\$SWSC_TEST_SEQ\"; fi; kill -TERM \$\$; return 0; }; swsc_collect() { :; }; contract_main"
+  must [ "$RC" -eq 143 ]
+  must grep -qxF held "$TMP/seq.log"
+  must [ ! -e "$UNIT_LOCK" ]
+}
+
 run_unit() {
   TMP=$(mktemp -d)
-  trap 'rm -rf "$TMP"' EXIT
+  # Why: 検査ごとに空にする検査専用のロック置き場。実ホストの既定のロックを使わないため。
+  UNIT_LOCK_BASE=$(lock_case_dir) || exit 1
+  UNIT_LOCK=$UNIT_LOCK_BASE/ports.lock
+  trap 'rm -rf "$TMP"; lock_case_clear "$UNIT_LOCK_BASE"' EXIT
   printf '== T907 入口の骨格と前提検査\n'
   check '不正なモードと余計な引数は終了コード2' t_usage_rejects_bad_arguments
   check 'package.json の6つのscriptsがe2e.shへ委譲する' t_package_json_delegates_six_scripts
@@ -3112,6 +3602,35 @@ run_unit() {
   check 'ブロックは AWS CLI と認証情報の変数を参照しない' t_gate_m09_block_has_no_aws_or_credentials
   check '既存の for ループに m09 を加えない' t_gate_m09_is_not_added_to_the_existing_loop
   check '既存の Compose の条件と NOTE 行は変わらない' t_gate_existing_compose_condition_and_note_are_unchanged
+  printf '== T2601 ロックとポート確認\n'
+  check 'ロックは2回目の取得を1で拒否し、確認手順を示し、自動で消さない' t_lock_acquire_busy
+  check '解放は所有者の自分だけ0で消し、他者の所有や不在では何も消さず1を返す' t_lock_release_non_owner
+  check 'ポート確認は空きで0、使用中で1と番号を出し、不正な引数は1を返す' t_check_ports_free
+  printf '== T2602 Client環境変数、件数、ログ\n'
+  check '環境変数は不正な名前や制御文字を2で拒否し、正常な値は1要素ずつ docker へ渡し、出力と終了コードを保つ' t_client_once_env_rejects_control
+  check 'WireMockの件数は完全一致だけを数え、食い違いや取得失敗は1を返し、経路を引数で渡す' t_wiremock_count_path
+  check 'Squidログの検査は固定文字列で全一致を確かめ、不一致と取得失敗を区別して1を返す' t_squid_log_check
+  printf '== T2603 管理対象の残存検査とラベル\n'
+  check '残存検査は残りが無ければ0、接頭辞とラベルの両方が一致するものを名前付きで1にする' t_managed_empty_passes_when_nothing_is_left
+  check '残存検査は残りの名前を標準エラーに示して1を返す' t_managed_empty_fails_and_names_labelled_prefixed_leftovers
+  check '残存検査は片方だけ一致するものを数えない' t_managed_empty_ignores_label_only_and_prefix_only
+  check '残存検査は docker の失敗を残存なしと区別して1を返す' t_managed_empty_docker_failure_is_not_reported_as_empty
+  check 'runnerが作るネットワークは swsc-net で、管理ラベルを持つ' t_runner_labels_network_has_prefix_and_label
+  printf '== T2603 入口のロックと trap（entry_trap_exit_143）\n'
+  check 'startはロックが既にあれば何も起動せず1を返し、他者のロックを消さない' t_entry_trap_exit_143_start_refuses_when_locked
+  check 'startは成功でも失敗でも終了後にロックが無い' t_entry_trap_exit_143_start_releases_lock_on_success_and_failure
+  check 'startのTERMは stop の後にロックを解放し、終了コード143' t_entry_trap_exit_143_start_term_stops_then_releases_lock
+  check 'startはポート使用中なら作成せず1を返し、ロックを解放する' t_entry_trap_exit_143_start_busy_port_creates_nothing_and_releases
+  check 'test:ciはロックを1回だけ取り、stopの最中は保持し、終了後に無い' t_entry_trap_exit_143_test_ci_takes_lock_once_and_releases_after_stop
+  check 'test:ciはロックが既にあれば何も起動せず1を返す' t_entry_trap_exit_143_test_ci_refuses_when_locked
+  check 'test:ciのINTは130で、collectとstopの後にロックが無い' t_entry_trap_exit_143_test_ci_int_releases_after_stop
+  check 'test:ciのTERMは143で、collectとstopの後にロックが無い' t_entry_trap_exit_143_test_ci_term_releases_after_stop
+  check 'testのTERMは143で、stopの後にロックが無い' t_entry_trap_exit_143_test_op_term_releases_lock
+  check 'testはロックが既にあれば何も起動せず1を返す' t_entry_trap_exit_143_test_op_refuses_when_locked
+  check 'stop、clean、logsはロックが残っていても動き、ロックに触れない' t_entry_trap_exit_143_stop_clean_logs_ignore_lock
+  check 'contractは4566使用中なら MiniStack を作らず aws を呼ばず1を返し、ロックを解放する' t_entry_trap_exit_143_contract_refuses_busy_4566_and_releases
+  check 'contractはロックが既にあれば何も起動せず1を返す' t_entry_trap_exit_143_contract_refuses_when_locked
+  check 'contractのTERMは143で、ロックが無い' t_entry_trap_exit_143_contract_term_releases_lock
 
 
 }

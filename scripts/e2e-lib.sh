@@ -22,6 +22,8 @@ SWSC_ID_RE='arn:aws|(^|[^0-9A-Za-z-])[0-9]{12}([^0-9A-Za-z-]|$)'
 # ディレクトリを削除や書き換えしないため（security-review の Low）。
 SWSC_DIR_MARKER=.swsc-managed
 SWSC_MOCK_PORT=8080
+# Squid が Client から使うプロキシの待ち受け。start の前に空きを確かめる（T2603）。
+SWSC_SQUID_PORT=3128
 # 手元の起動（start、contract）で使う完成版の入力。start と contract が同じ値を使うため1か所に置く。
 SWSC_LOCAL_CLIENT_IMAGE=swsc-client:e2e
 SWSC_LOCAL_SQUID_IMAGE=swsc-squid:e2e
@@ -175,6 +177,39 @@ d = json.load(sys.stdin)
 print(sum(1 for r in d.get('requests', []) if str(r.get('request', {}).get('url', '')).startswith('/api/')))"
 }
 
+# 指定した経路と完全一致する URL の受信数を返す。取得や解析に失敗したら1。
+# Why: 接頭辞では数えない。/api/users/123 が /api/users/1234 や /api/users/123/x を含むと、件数が合わないため。
+# Why not: 経路を python のコードに埋め込む。引数で渡せば、記号を含む経路がコードとして解釈されないため。
+# Why: meta.total と requests[] が食い違うときは数えない。一部だけ読んだ件数で通すと、検査の意味が無くなるため（scenario-lib の journal_count と同じ作法）。
+swsc_wiremock_count_path() { # 経路
+  if [ "$#" -ne 1 ] || [ -z "$1" ]; then
+    printf 'FAIL: 経路を1つ指定する\n' >&2
+    return 1
+  fi
+  _body=$(curl -fsS --max-time 5 http://127.0.0.1:8080/__admin/requests) || return 1
+  printf '%s' "$_body" | python3 -B -c '
+import json, sys
+path = sys.argv[1]
+d = json.load(sys.stdin)
+entries = d.get("requests")
+meta = d.get("meta")
+total = meta.get("total") if isinstance(meta, dict) else None
+if not isinstance(entries, list) or not isinstance(total, int) or total != len(entries):
+    sys.stderr.write("FAIL: requests[] が meta.total と一致しない\n")
+    sys.exit(1)
+count = 0
+for entry in entries:
+    request = entry.get("request") if isinstance(entry, dict) else None
+    url = request.get("url") if isinstance(request, dict) else None
+    if not isinstance(url, str):
+        sys.stderr.write("FAIL: requests[].request.url が文字列ではない\n")
+        sys.exit(1)
+    if url == path:
+        count += 1
+print(count)
+' "$1"
+}
+
 # ---------------------------------------------------------------------------
 # 入口の操作（start、test、test:ci、stop、clean、logs、collect）。
 # 関数はここに置き、scripts/e2e.sh は振り分けだけを行う。Why: 検査の unit が、順序と終了コードを
@@ -209,8 +244,9 @@ swsc_start_main() {
     return 1
   }
   # Why: 占有者の名前では判定しない。プロジェクト名は任意で、旧基盤の名前を当てにできないため。
-  if swsc_port_in_use "$SWSC_MOCK_PORT"; then
-    printf 'FAIL: ポート%sが使用中（swsc- 以外のコンテナかプロセス。旧基盤の可能性がある）\n' "$SWSC_MOCK_PORT" >&2
+  # Why: 使う2つのポートを、停止の後に確かめる。自分の残りを使用中と誤認しないため。
+  if ! swsc_check_ports_free "$SWSC_MOCK_PORT" "$SWSC_SQUID_PORT"; then
+    printf 'FAIL: 使用中のポートがある（swsc- 以外のコンテナかプロセス。旧基盤の可能性がある）\n' >&2
     return 1
   fi
   # Why: build_images が出力先の中を作り直す（rm -r）ため、その前に自分のディレクトリか確かめる。
@@ -232,33 +268,103 @@ swsc_start_main() {
 
 # start 操作（単独）。失敗時だけ stop を呼ぶ。Why: 成功時は環境を残して調べられるようにするため。
 # Why not collect: 単独の start の失敗では、収集は test:ci の仕事であるため。
+# ロックは最初に取る。取れなければ trap を張らずに戻る。後始末（stop）の後にロックを解放する。
 swsc_start_op() {
+  swsc_lock_enter || return 1
   trap 'exit 130' INT
   trap 'exit 143' TERM
-  trap '_t=$?; swsc_stop >/dev/null 2>&1 || true; exit "$_t"' EXIT
+  trap '_t=$?; swsc_stop >/dev/null 2>&1 || true; swsc_lock_leave || [ "$_t" -ne 0 ] || _t=1; exit "$_t"' EXIT
   _rc=0
   swsc_start_main || _rc=$?
   trap - EXIT INT TERM
   if [ "$_rc" -ne 0 ]; then swsc_stop || true; fi
+  swsc_lock_leave || { [ "$_rc" -ne 0 ] || _rc=1; }
   return "$_rc"
 }
 
 # 1回の要求で Client を1回起動する。上書きの URL は -e で渡す（env-file より優先される）。
+# 追加の NAME=VALUE（省略可）も -e で渡す。Why: 呼び出し側が環境変数を足せるよう、既存の3引数の形を残したまま拡張するため。
 # Why: 引数の組み立ては run の .args に任せ、ここでは上書きだけを足す。
-swsc_client_once() { # 実行ディレクトリ 実行ID ベースURL
+swsc_client_once() { # 実行ディレクトリ 実行ID ベースURL [NAME=VALUE...]
   _file=$1/swsc-client-$2.args
+  _id=$2
   # Why: set -- が位置パラメータを入れ替えるため、ベースURLは先に別の変数へ退避する。
   # Why not: $3 を後から参照する形は採らない。入れ替え後の値（--label）が URL になり、Squid が全て拒否する（実機で確認）。
   _base_url=$3
+  shift 3
   if [ ! -f "$_file" ]; then
-    printf 'FAIL: 引数のファイルが無い: swsc-client-%s\n' "$2" >&2
+    printf 'FAIL: 引数のファイルが無い: swsc-client-%s\n' "$_id" >&2
     return 1
   fi
-  set --
+  # Why: -e は、.args のイメージ名より前に並ぶ必要がある。追加分を先に -e の組へ直してから、.args の行を後ろへ足す。
+  # Why not: docker run の後ろに置く。イメージより後ろの語は Client のコマンドの引数になるため。
+  _n=$#
+  while [ "$_n" -gt 0 ]; do
+    _kv=$1
+    shift
+    set -- "$@" -e "$_kv"
+    _n=$((_n - 1))
+  done
+  set -- "$@" -e "TEST_API_BASE_URL=$_base_url"
   while IFS= read -r _line || [ -n "$_line" ]; do
     set -- "$@" "$_line"
   done <"$_file"
-  docker run --rm -e "TEST_API_BASE_URL=$_base_url" "$@"
+  docker run --rm "$@"
+}
+
+# Client を1回起動し、標準出力と標準エラーをファイルへ分けて保存する。終了コードは Client のものをそのまま返す。
+# 引数や前提が足りないときは、docker を呼ばずに 2 を返す。
+# Why: 環境変数の名前と値は、実行の前に全部検査する。途中の不正で一部だけ実行されると、結果の解釈が難しくなるため。
+# Why not: 値をシェル文字列へ連結する。記号や空白を含む値が、コマンドとして解釈されるのを避けるため。
+swsc_client_once_env() { # 実行ディレクトリ 実行ID ベースURL 標準出力の保存先 標準エラーの保存先 [NAME=VALUE...]
+  if [ "$#" -lt 5 ]; then
+    printf 'FAIL: 引数が足りない（実行ディレクトリ、実行ID、ベースURL、標準出力の保存先、標準エラーの保存先）\n' >&2
+    return 2
+  fi
+  _env_run=$1
+  _env_id=$2
+  _env_url=$3
+  _env_out=$4
+  _env_err=$5
+  shift 5
+  if [ -z "$_env_out" ] || [ -z "$_env_err" ]; then
+    printf 'FAIL: 標準出力と標準エラーの保存先を指定する\n' >&2
+    return 2
+  fi
+  if [ ! -f "$_env_run/swsc-client-$_env_id.args" ]; then
+    printf 'FAIL: 起動情報が無い: swsc-client-%s\n' "$_env_id" >&2
+    return 2
+  fi
+  # Why: 改行の判定に使う。case のパターンへ直接書くと、改行の扱いが読みにくくなるため。
+  _nl=$(printf '\n_')
+  _nl=${_nl%_}
+  for _kv in "$@"; do
+    # Why: 値は表示しない。認証情報を含みうる値を、エラーに出さないため。
+    case $_kv in
+      *"$_nl"* | *[[:cntrl:]]*)
+        printf 'FAIL: 環境変数の指定に制御文字（改行を含む）がある。値は表示しない\n' >&2
+        return 2
+        ;;
+    esac
+    case $_kv in
+      *=*) ;;
+      *)
+        printf 'FAIL: 環境変数の指定が NAME=VALUE の形ではない\n' >&2
+        return 2
+        ;;
+    esac
+    _name=${_kv%%=*}
+    # Why: 名前が数字で始まる、または記号を含むと、docker run が環境変数として受け付けないため。
+    case $_name in
+      '' | [0-9]* | *[!A-Za-z0-9_]*)
+        printf 'FAIL: 環境変数の名前が不正（英字かアンダースコアで始まる英数字とアンダースコアだけ）\n' >&2
+        return 2
+        ;;
+    esac
+  done
+  _rc=0
+  swsc_client_once "$_env_run" "$_env_id" "$_env_url" "$@" >"$_env_out" 2>"$_env_err" || _rc=$?
+  return "$_rc"
 }
 
 # WireMock の受信記録を空にし、空になったことを確かめる。
@@ -333,10 +439,12 @@ swsc_test_run() {
 
 # test 操作。INT と TERM のときだけ stop を呼ぶ。通常の失敗では環境を残す（調べられるように）。
 swsc_test_op() {
+  # Why: ロックは取ってから trap を張る。取れないときに stop を呼ぶと、他の実行の swsc- を止めるため。
+  swsc_lock_enter || return 1
   _sig=0
   trap '_sig=130; exit 130' INT
   trap '_sig=143; exit 143' TERM
-  trap '_t=$?; if [ "$_sig" -ne 0 ]; then swsc_stop >/dev/null 2>&1 || true; fi; exit "$_t"' EXIT
+  trap '_t=$?; if [ "$_sig" -ne 0 ]; then swsc_stop >/dev/null 2>&1 || true; fi; swsc_lock_leave || [ "$_t" -ne 0 ] || _t=1; exit "$_t"' EXIT
   _rc=0
   swsc_test_run || _rc=$?
   return "$_rc"
@@ -345,10 +453,12 @@ swsc_test_op() {
 # test:ci。start が失敗しても test を飛ばし、collect、stop の順で必ず呼ぶ。終了コードは test か start の値。
 # EXIT の trap は、INT と TERM で本体に届かなかった場合の最終防衛に限る（_done で二重実行を防ぐ）。
 swsc_test_ci_main() {
+  # Why: ロックはトップレベルで1回だけ取る。配下の swsc_start_main は SWSC_LOCK_HELD を見て取り直さない。
+  swsc_lock_enter || return 1
   _done=0
   trap 'exit 130' INT
   trap 'exit 143' TERM
-  trap '_t=$?; if [ "$_done" -eq 0 ]; then swsc_collect || true; swsc_stop || true; fi; exit "$_t"' EXIT
+  trap '_t=$?; if [ "$_done" -eq 0 ]; then swsc_collect || true; swsc_stop || true; fi; swsc_lock_leave || [ "$_t" -ne 0 ] || _t=1; exit "$_t"' EXIT
   _rc=0
   swsc_start_main || _rc=$?
   if [ "$_rc" -eq 0 ]; then
@@ -365,6 +475,43 @@ swsc_test_ci_main() {
 # 停止。接頭辞とラベルの両方が一致するものだけを、依存の順に消す。冪等（対象が無ければ0）。
 swsc_stop() {
   swsc_runner_remove_managed
+}
+
+# 管理対象（接頭辞 swsc- とラベル swsc.managed=true の両方に一致）が残っていなければ0。
+# 残っていれば名前を標準エラーに示して1。Docker の呼び出しが失敗したときも1にし、残存なしと区別する。
+# Why: runner の後始末と同じ基準で数えるため。片方だけ一致するものは、他のプロジェクトの資源として数えない。
+# Why not `|| true`: Docker が失敗したときに「残存なし」と誤認させないため。
+swsc_check_managed_empty() {
+  _ps=$(docker ps -a --filter "label=$SWSC_LABEL" --format '{{.Names}}') || {
+    printf 'FAIL: docker ps に失敗したため、管理対象の残存を確かめられない\n' >&2
+    return 1
+  }
+  _nets=$(docker network ls --filter "label=$SWSC_LABEL" --format '{{.Name}}') || {
+    printf 'FAIL: docker network ls に失敗したため、管理対象の残存を確かめられない\n' >&2
+    return 1
+  }
+  _rc=0
+  while read -r _name; do
+    case $_name in
+      "$SWSC_PREFIX"*)
+        printf 'FAIL: 管理対象のコンテナが残っている: %s\n' "$_name" >&2
+        _rc=1
+        ;;
+    esac
+  done <<EOF
+$_ps
+EOF
+  while read -r _name; do
+    case $_name in
+      "$SWSC_PREFIX"*)
+        printf 'FAIL: 管理対象のネットワークが残っている: %s\n' "$_name" >&2
+        _rc=1
+        ;;
+    esac
+  done <<EOF
+$_nets
+EOF
+  return "$_rc"
 }
 
 # 自分の作ったディレクトリを消す。変数が空、または無いなら何もしない（空の変数で広い場所を消さないため）。
@@ -518,4 +665,144 @@ swsc_collect() {
     return 1
   fi
   return 0
+}
+
+# T2601: 固定ポート（8080、3128、4566）を、同時に1つの実行だけが使うためのロック。
+# Why: ホスト全体の資源なので、並列の実行が互いのポートを壊さないようにするため。
+# Why not: $TMPDIR に置く。プロセスや端末ごとに異なり、別のシェル間で排他が効かないため。
+# Why not: 古いロックの自動削除。実行中の他者のロックを壊すため。利用者が確かめてから手動で消す。
+
+# ロックを取る。取れれば0。既にある、または親が無くて作れなければ標準エラーに示して1。
+# Why: mkdir は既存のときだけ失敗するので、同時に取れるのは1つだけになる。親は作らない（場所の誤りを隠さないため）。
+swsc_lock_acquire() {
+  _lock=${SWSC_LOCK_DIR:-/tmp/swsc-e2e-ports.lock}
+  if ! mkdir "$_lock" 2>/dev/null; then
+    if [ -d "$_lock" ]; then
+      _owner=
+      if [ -f "$_lock/owner" ]; then
+        _owner=$(tr '\n' ' ' <"$_lock/owner")
+      fi
+      printf 'FAIL: 固定ポートのロックが既にある: %s（所有者: %s）\n' "$_lock" "${_owner:-不明}" >&2
+      printf '確認: ls -ld %s で実行中の e2e と管理対象コンテナを見て、実行中でないことを確かめてから rmdir %s で手動で消す。\n' \
+        "$_lock" "$_lock" >&2
+    else
+      printf 'FAIL: 固定ポートのロックを作れない（親ディレクトリが無い等）: %s\n' "$_lock" >&2
+    fi
+    return 1
+  fi
+  # Why: 開始時刻は、取り残されたロックが古いかどうかを利用者が判断する材料になるため。
+  if ! printf '%s\n%s\n' "$$" "$(date '+%Y-%m-%dT%H:%M:%S%z')" >"$_lock/owner"; then
+    # Why: 所有者を書けなかったロックは、誰のものか判らないので残さない。
+    rm -f "$_lock/owner"
+    rmdir "$_lock"
+    printf 'FAIL: ロックの所有者を書けなかった: %s\n' "$_lock" >&2
+    return 1
+  fi
+}
+
+# 自分（$$）が取ったロックだけを解放する。解放できれば0。対象が違えば何も消さず1。
+# Why: 他者のロックを消すと、その実行中に別の実行が同じポートへ入り込むため。
+swsc_lock_release() {
+  _lock=${SWSC_LOCK_DIR:-/tmp/swsc-e2e-ports.lock}
+  if [ ! -f "$_lock/owner" ] || [ "$(sed -n 1p "$_lock/owner")" != "$$" ]; then
+    printf 'FAIL: ロックの所有者ではないため解放しない: %s\n' "$_lock" >&2
+    return 1
+  fi
+  # Why not: rm -rf。中身を問わず消すと、想定外のファイルまで道連れにするため。owner だけを消してから rmdir する。
+  rm -f "$_lock/owner" || return 1
+  rmdir "$_lock"
+}
+
+# 入口（start、test、test:ci、contract）の最初に呼ぶ。取れれば0、取れなければ標準エラーに示して1。
+# 取れなかった入口は、trap も後始末も設定せずに止まる（他の実行の swsc- を止めないため）。
+# Why: 同じシェルの中で2回取らないよう SWSC_LOCK_HELD を見る。test:ci のように入口が入れ子で呼ぶ
+#      操作でも、取得は1回に保てるため。export しないのは、子プロセスが自分の取ったロックと誤認しないため。
+swsc_lock_enter() {
+  if [ "${SWSC_LOCK_HELD:-0}" = 1 ]; then
+    return 0
+  fi
+  swsc_lock_acquire || return 1
+  SWSC_LOCK_HELD=1
+  _SWSC_LOCK_OWNED=1
+}
+
+# 自分が取ったロックだけを解放する。取っていなければ何もせず0。解放に失敗したら1。
+# Why: 呼び出し元は、後始末（stop、collect）の後で呼ぶ。先に消すと、後始末の最中に別の実行が入るため。
+# Why not `|| true`: 解放できなかったロックを残ったまま成功扱いにしないため。呼び出し元が終了コードに反映する。
+swsc_lock_leave() {
+  if [ "${_SWSC_LOCK_OWNED:-0}" != 1 ]; then
+    return 0
+  fi
+  _SWSC_LOCK_OWNED=0
+  SWSC_LOCK_HELD=0
+  swsc_lock_release
+}
+
+# 指定したポートが全て空いていれば0。使用中のポート番号を標準エラーに出し、1を返す。
+# Why: 引数を先に全部検査してから確かめる。不正な番号を、空きの判定に混ぜないため。
+# Why not: 1つ目で止める。使用中のポートを一度に全部示すと、利用者が一回で対処できるため。
+swsc_check_ports_free() { # ポート番号...
+  if [ "$#" -eq 0 ]; then
+    printf 'FAIL: 確認するポート番号を指定する\n' >&2
+    return 1
+  fi
+  for _p in "$@"; do
+    case $_p in
+      '' | *[!0-9]*)
+        printf 'FAIL: ポート番号が不正（数字だけで指定する）: %s\n' "$_p" >&2
+        return 1
+        ;;
+    esac
+    if [ "$_p" -lt 1 ] || [ "$_p" -gt 65535 ]; then
+      printf 'FAIL: ポート番号が範囲外（1〜65535）: %s\n' "$_p" >&2
+      return 1
+    fi
+  done
+  _rc=0
+  for _p in "$@"; do
+    if swsc_port_in_use "$_p"; then
+      printf 'FAIL: ポート %s は使用中\n' "$_p" >&2
+      _rc=1
+    fi
+  done
+  return "$_rc"
+}
+
+# Squid の access log に、指定した各文字列が含まれれば0。1つでも無ければ1。
+# Why: grep -F で固定文字列として探す。パターンをシェルや sh -c に渡すと、* や $( ) が評価されるため。
+# Why: 不一致と取得失敗を別の文言にする。前者は検査の結果、後者は環境の問題で、利用者の対処が違うため。
+# Why: access log のパスは squid-config/squid.conf の access_log 行（/var/log/squid/access.log）と同じ値にする。
+# Why not: 既定のパスを推測する。設定ファイルと違う場所を読むと、空や古い記録で誤って通るため。
+swsc_squid_log_check() { # パターン...
+  if [ "$#" -eq 0 ]; then
+    printf 'FAIL: 検査するパターンを1つ以上指定する\n' >&2
+    return 1
+  fi
+  # Why: 改行を含むパターンは grep -F が複数のパターンとして扱うため、一致の意味が変わる。拒否する。
+  _nl=$(printf '\n_')
+  _nl=${_nl%_}
+  for _p in "$@"; do
+    case $_p in
+      '')
+        printf 'FAIL: 空のパターンは指定できない\n' >&2
+        return 1
+        ;;
+      *"$_nl"*)
+        printf 'FAIL: 改行を含むパターンは指定できない\n' >&2
+        return 1
+        ;;
+    esac
+  done
+  _log=$(docker exec "${SWSC_PREFIX}squid" cat /var/log/squid/access.log) || {
+    printf 'FAIL: Squid の access log を取得できない（docker exec の失敗）\n' >&2
+    return 1
+  }
+  _rc=0
+  for _p in "$@"; do
+    if ! printf '%s\n' "$_log" | grep -Fq -- "$_p"; then
+      printf 'FAIL: Squid の access log に一致しない: %s\n' "$_p" >&2
+      _rc=1
+    fi
+  done
+  return "$_rc"
 }
