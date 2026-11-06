@@ -921,6 +921,7 @@ smoke_case_compose_fail() {
 # 子の信号の既定の動作を preexec_fn で戻す。バックグラウンドのシェルは INT を無視するため。
 smoke_child_signal() { # 信号名 子の一時ディレクトリ
   python3 - "$SELF" "$1" "$WIREMOCK_URL" "$2" "$WORK/child-$1.err" <<'PY'
+import http.client
 import os
 import signal
 import subprocess
@@ -938,41 +939,80 @@ def restore_default_signals():
         signal.signal(s, signal.SIG_DFL)
 
 
+def note(message):
+    # 診断は標準エラーへ出す。標準出力は呼び出し側が終了コードとして読むため、混ぜない。
+    sys.stderr.write(f"signal-case {sig_name}: {message}\n")
+
+
+def stop_child(proc):
+    # 準備できなかった子も、信号で止めて後始末を走らせる。
+    # Why not proc.kill(): SIGKILL は子のトラップを走らせず、Compose のスタックが残るため。
+    proc.send_signal(signal.SIGTERM)
+    try:
+        proc.wait(timeout=60)
+    except subprocess.TimeoutExpired:
+        proc.kill()
+        proc.wait()
+
+
+started = time.time()
 with open(err_path, "w") as err:
     proc = subprocess.Popen(["sh", self_path, "smoke"], env=env,
                             stdout=subprocess.DEVNULL, stderr=err,
                             preexec_fn=restore_default_signals)
     ready = False
-    deadline = time.time() + 180
+    last_error = "なし"
+    deadline = started + 180
     while time.time() < deadline and proc.poll() is None:
         try:
             with urllib.request.urlopen(admin + "/__admin/mappings", timeout=2) as resp:
                 if resp.status == 200:
                     ready = True
                     break
-        except OSError:
+        # HTTPException は OSError ではない。ここで落とすと、待機の上限を待たずに原因不明で終わる。
+        except (OSError, http.client.HTTPException) as exc:
+            last_error = type(exc).__name__
             time.sleep(1)
+    ready_after = time.time() - started
     if not ready:
-        proc.kill()
-        proc.wait()
+        note(f"管理APIが準備できない（待機 {ready_after:.0f} 秒、子の終了コード={proc.poll()}、最後の例外={last_error}）")
+        if proc.poll() is None:
+            stop_child(proc)
         print("not-ready")
         sys.exit(0)
     proc.send_signal(sig)
     try:
-        print(proc.wait(timeout=120))
+        rc = proc.wait(timeout=120)
+        note(f"準備まで {ready_after:.0f} 秒、信号から終了まで {time.time() - started - ready_after:.0f} 秒、終了コード={rc}")
+        print(rc)
     except subprocess.TimeoutExpired:
+        note(f"信号から120秒たっても終了しない（準備まで {ready_after:.0f} 秒）")
         proc.kill()
         proc.wait()
         print("timeout")
 PY
 }
 
+# 信号の検査が外れたとき、原因を特定できるように、子の標準エラーの末尾と残存を出す。
+# Why: 子の標準エラーと一時ディレクトリは、検査の後始末で消える。外れた時点で残さないと、事後に確かめられない。
+smoke_signal_diag() { # 信号名 子の終了コード 期待する終了コード 子の一時ディレクトリ
+  printf 'DIAG: %s: 子の終了コード=%s 期待=%s\n' "$1" "$2" "$3" >&2
+  printf 'DIAG: %s: 一時ディレクトリの残り=[%s] Compose の残存=%s件\n' "$1" \
+    "$(ls -A "$4" 2>/dev/null | tr '\n' ' ')" "$(docker-compose ps -a -q 2>/dev/null | wc -l | tr -d ' ')" >&2
+  printf 'DIAG: %s: 子の標準エラーの末尾 20 行\n' "$1" >&2
+  grep -v 'Making directories' "$WORK/child-$1.err" 2>/dev/null | tail -n 20 | sed 's/^/  | /' >&2 || true
+}
+
 smoke_case_signal() { # 信号名 期待する終了コード
   _t=$(mktemp -d "$WORK/child.XXXXXX") || return 1
   _rc=$(smoke_child_signal "$1" "$_t") || return 1
-  [ "$_rc" = "$2" ] \
+  if [ "$_rc" = "$2" ] \
     && grep -Fq 'cleanup: reset attempted' "$WORK/child-$1.err" \
-    && smoke_clean_after "$_t"
+    && smoke_clean_after "$_t"; then
+    return 0
+  fi
+  smoke_signal_diag "$1" "$_rc" "$2" "$_t"
+  return 1
 }
 
 # ---- 実装: 検査の並び ----
