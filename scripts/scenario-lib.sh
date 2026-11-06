@@ -209,6 +209,7 @@ wiremock_reset() { # （引数なし。宛先は WIREMOCK_URL）
 # リセット後の状態を管理APIの応答から確かめる。3項目すべてが期待どおりなら 0、
 # 1つでも外れるか読み取れなければ、項目名と期待値と実測値を標準エラーへ出して 1 を返す。
 # 項目は reset-experiment.md の4章と6章に従う（件数は meta.total、状態は scenarios[].state）。
+# ジャーナルの件数だけは、Squid の内部要求（/squid-internal-）を除いて数える（Issue #23）。
 wiremock_verify_reset() { # [マッピングのディレクトリ]
   _dir=${1:-wiremock-scenarios/mappings}
   _base=${WIREMOCK_URL:-http://127.0.0.1:8080}
@@ -244,6 +245,30 @@ def total_of(body, label):
         sys.exit(1)
     return value
 
+# Squid が自分で WireMock へ送る内部要求（/squid-internal-periodic/store_digest など）の接頭辞。
+# Why: これはテストの通信ではなく、散発的にジャーナルへ混ざる（Issue #23）。
+# Why not 件数 meta.total をそのまま使う: 内部要求の1件で、リセット確認が偽陽性の失敗になるため。
+# Why not /api/ で始まる URL だけを数える: テスト以外の想定外の要求が残っても検出できなくなり、確認を弱めるため。
+SQUID_INTERNAL_PREFIX = "/squid-internal-"
+
+def journal_count(body, label):
+    # meta.total と requests[] の件数が食い違うと、内部要求を見分けられない。数え損ねて通さないよう読み取り失敗にする。
+    total = total_of(body, label)
+    entries = body.get("requests")
+    if not isinstance(entries, list) or len(entries) != total:
+        sys.stderr.write(f"wiremock_verify_reset: requests[] が meta.total と一致しない: {label}\n")
+        sys.exit(1)
+    count = 0
+    for entry in entries:
+        request = entry.get("request") if isinstance(entry, dict) else None
+        url = request.get("url") if isinstance(request, dict) else None
+        if not isinstance(url, str):
+            sys.stderr.write(f"wiremock_verify_reset: requests[].request.url が読めない: {label}\n")
+            sys.exit(1)
+        if not url.startswith(SQUID_INTERNAL_PREFIX):
+            count += 1
+    return count
+
 mappings_dir, mappings_path, requests_path, scenarios_path = sys.argv[1:5]
 failures = []
 
@@ -253,8 +278,8 @@ actual_mappings = total_of(read(mappings_path, "mappings"), "mappings")
 if actual_mappings != expected_mappings:
     failures.append(f"マッピング件数: 期待 {expected_mappings} 実測 {actual_mappings}")
 
-# 項目2: リクエストジャーナルが空
-actual_journal = total_of(read(requests_path, "requests"), "requests")
+# 項目2: リクエストジャーナルが空（Squid の内部要求は数えない）
+actual_journal = journal_count(read(requests_path, "requests"), "requests")
 if actual_journal != 0:
     failures.append(f"リクエストジャーナル件数: 期待 0 実測 {actual_journal}")
 

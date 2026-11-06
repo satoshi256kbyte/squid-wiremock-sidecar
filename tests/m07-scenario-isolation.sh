@@ -305,7 +305,67 @@ unit_doc_content() {
   grep -Fq '(docs/シナリオ隔離.md)' README.md && [ -f "$_doc" ]
 }
 
+# wiremock_verify_reset を、偽の管理API応答で実行する。curl を関数で差し替え、-o の出力先へ決め打ちのJSONを書く。
+# Why: 実機の WireMock では、Squid の内部要求が混ざる偶然を作れず、偽陽性を再現できないため。
+# Why not 本物の HTTP サーバーを立てる: ポートの取り合いと後始末が増え、判定に必要なのは応答のJSONだけのため。
+verify_with() { # リクエスト応答のJSON シナリオ応答のJSON マッピング応答のmeta.total
+  (
+    FAKE_REQ=$1
+    FAKE_SCN=$2
+    FAKE_MAP=$3
+    curl() {
+      _o=
+      _u=
+      while [ $# -gt 0 ]; do
+        case $1 in
+          -o) _o=$2; shift 2 ;;
+          -*) shift ;;
+          *) _u=$1; shift ;;
+        esac
+      done
+      case $_u in
+        */__admin/mappings) printf '{"meta":{"total":%s}}' "$FAKE_MAP" >"$_o" ;;
+        */__admin/requests) printf '%s' "$FAKE_REQ" >"$_o" ;;
+        */__admin/scenarios) printf '%s' "$FAKE_SCN" >"$_o" ;;
+        *) return 22 ;;
+      esac
+    }
+    _md=$(mktemp -d "$tmp_root/verify-map.XXXXXX")
+    printf '{}\n' >"$_md/a.json"
+    wiremock_verify_reset "$_md"
+  )
+}
+
+# Issue #23: Squid の内部要求は数えず、テストの通信と想定外の要求は数える。確認の3項目は弱めない。
+unit_verify_reset_journal() {
+  _scn_ok='{"scenarios":[{"name":"g","state":"Started"}]}'
+  _empty='{"meta":{"total":0},"requests":[]}'
+  _internal='{"meta":{"total":1},"requests":[{"request":{"url":"/squid-internal-periodic/store_digest"}}]}'
+  _api='{"meta":{"total":1},"requests":[{"request":{"url":"/api/users/123"}}]}'
+  _mixed='{"meta":{"total":2},"requests":[{"request":{"url":"/squid-internal-periodic/store_digest"}},{"request":{"url":"/api/users/123"}}]}'
+  _lookalike='{"meta":{"total":1},"requests":[{"request":{"url":"/api/squid-internal-x"}}]}'
+  _mismatch='{"meta":{"total":2},"requests":[{"request":{"url":"/squid-internal-periodic/store_digest"}}]}'
+  _nourl='{"meta":{"total":1},"requests":[{"request":{}}]}'
+  _bad_scn='{"scenarios":[{"name":"g","state":"Succeeded"}]}'
+  expect_rc "ジャーナル: 空なら通る" 0 verify_with "$_empty" "$_scn_ok" 1
+  expect_rc "ジャーナル: Squid の内部要求だけなら通る（偽陽性にならない）" 0 verify_with "$_internal" "$_scn_ok" 1
+  expect_err "ジャーナル: テストの通信が1件残れば実測1で失敗する" 1 "リクエストジャーナル件数: 期待 0 実測 1" \
+    verify_with "$_api" "$_scn_ok" 1
+  expect_err "ジャーナル: 内部要求とテストの通信が混ざれば、テストの通信だけを数える" 1 "リクエストジャーナル件数: 期待 0 実測 1" \
+    verify_with "$_mixed" "$_scn_ok" 1
+  expect_err "ジャーナル: 接頭辞でなく部分一致の URL は内部要求として除外しない" 1 "リクエストジャーナル件数: 期待 0 実測 1" \
+    verify_with "$_lookalike" "$_scn_ok" 1
+  expect_err "ジャーナル: meta.total と requests[] の件数が食い違えば数えずに失敗する" 1 "meta.total と一致しない" \
+    verify_with "$_mismatch" "$_scn_ok" 1
+  expect_err "ジャーナル: URL が読めなければ失敗する" 1 "request.url が読めない" verify_with "$_nourl" "$_scn_ok" 1
+  expect_err "確認の3項目: マッピング件数の不一致は引き続き失敗する" 1 "マッピング件数: 期待 1 実測 2" \
+    verify_with "$_empty" "$_scn_ok" 2
+  expect_err "確認の3項目: シナリオ状態が Started でなければ引き続き失敗する" 1 "シナリオ状態: g 期待 Started 実測 Succeeded" \
+    verify_with "$_internal" "$_bad_scn" 1
+}
+
 unit_main() {
+  unit_verify_reset_journal
   check "文書の追加手順（JSON例が解決と静的検査を通る）" unit_doc_add_procedure
   check "文書の内容（並列禁止の節、識別情報の不在、README のリンク）" unit_doc_content
   unit_name_resolution
@@ -511,6 +571,7 @@ smoke_case_assert() {
 # 子の信号の既定の動作を Python の preexec_fn で戻す。バックグラウンドのシェルは INT を無視するため。
 smoke_child_signal() { # 信号名 子の一時ディレクトリ
   python3 - "$SELF" "$1" "$smoke_wiremock_url" "$2" "$smoke_dir/child-$1.err" <<'PY'
+import http.client
 import os
 import signal
 import subprocess
@@ -526,41 +587,78 @@ def restore_default_signals():
     for s in (signal.SIGINT, signal.SIGTERM):
         signal.signal(s, signal.SIG_DFL)
 
+def note(message):
+    # 診断は標準エラーへ出す。標準出力は呼び出し側が終了コードとして読むため、混ぜない。
+    sys.stderr.write(f"signal-case {sig_name}: {message}\n")
+
+def stop_child(proc):
+    # 準備できなかった子も、信号で止めて後始末を走らせる。
+    # Why not proc.kill(): SIGKILL は子のトラップを走らせず、Compose のスタックが残るため。
+    proc.send_signal(signal.SIGTERM)
+    try:
+        proc.wait(timeout=60)
+    except subprocess.TimeoutExpired:
+        proc.kill()
+        proc.wait()
+
+started = time.time()
 with open(err_path, "w") as err:
     proc = subprocess.Popen(["sh", self_path, "smoke"], env=env,
                             stdout=subprocess.DEVNULL, stderr=err,
                             preexec_fn=restore_default_signals)
     ready = False
-    deadline = time.time() + 180
+    last_error = "なし"
+    deadline = started + 180
     while time.time() < deadline and proc.poll() is None:
         try:
             with urllib.request.urlopen(admin + "/__admin/mappings", timeout=2) as resp:
                 if resp.status == 200:
                     ready = True
                     break
-        except OSError:
+        # HTTPException は OSError ではない。ここで落とすと、待機の上限を待たずに原因不明で終わる。
+        except (OSError, http.client.HTTPException) as exc:
+            last_error = type(exc).__name__
             time.sleep(1)
+    ready_after = time.time() - started
     if not ready:
-        proc.kill()
-        proc.wait()
+        note(f"管理APIが準備できない（待機 {ready_after:.0f} 秒、子の終了コード={proc.poll()}、最後の例外={last_error}）")
+        if proc.poll() is None:
+            stop_child(proc)
         print("not-ready")
         sys.exit(0)
     proc.send_signal(sig)
     try:
-        print(proc.wait(timeout=120))
+        rc = proc.wait(timeout=120)
+        note(f"準備まで {ready_after:.0f} 秒、信号から終了まで {time.time() - started - ready_after:.0f} 秒、終了コード={rc}")
+        print(rc)
     except subprocess.TimeoutExpired:
+        note(f"信号から120秒たっても終了しない（準備まで {ready_after:.0f} 秒）")
         proc.kill()
         proc.wait()
         print("timeout")
 PY
 }
 
+# 信号の検査が外れたとき、原因を特定できるように、子の標準エラーの末尾と残存を出す。
+# Why: 子の標準エラーと一時ディレクトリは、検査の後始末で消える。外れた時点で残さないと、事後に確かめられない。
+smoke_signal_diag() { # 信号名 子の終了コード 期待する終了コード 子の一時ディレクトリ
+  printf 'DIAG: %s: 子の終了コード=%s 期待=%s\n' "$1" "$2" "$3" >&2
+  printf 'DIAG: %s: 一時ディレクトリの残り=[%s] Compose の残存=%s件\n' "$1" \
+    "$(ls -A "$4" 2>/dev/null | tr '\n' ' ')" "$(docker-compose ps -a -q 2>/dev/null | wc -l | tr -d ' ')" >&2
+  printf 'DIAG: %s: 子の標準エラーの末尾 20 行\n' "$1" >&2
+  grep -v 'Making directories' "$smoke_dir/child-$1.err" 2>/dev/null | tail -n 20 | sed 's/^/  | /' >&2 || true
+}
+
 smoke_case_signal() { # 信号名 期待する終了コード
   _t=$(mktemp -d "$tmp_root/child.XXXXXX") || return 1
   _rc=$(smoke_child_signal "$1" "$_t") || return 1
-  [ "$_rc" = "$2" ] \
+  if [ "$_rc" = "$2" ] \
     && grep -Fq 'cleanup: reset attempted' "$smoke_dir/child-$1.err" \
-    && smoke_clean_after "$_t"
+    && smoke_clean_after "$_t"; then
+    return 0
+  fi
+  smoke_signal_diag "$1" "$_rc" "$2" "$_t"
+  return 1
 }
 
 smoke_failure_path() {
