@@ -62,3 +62,43 @@ M04とM06はこの時点でComposeに依存しているため、それらのsmok
 | unitの一時停止 | サブエージェントの1回目のunitが途中で止まり、再実行で通った。メインの3回の実行では再現しなかった。原因は未特定 |
 | 実行環境の注意 | macOSには`timeout`コマンドが無い。時間制限が要るときはPythonの`subprocess`を使う |
 | 未実行の層 | contractはCIで実行する。M04とM06の実機smokeは、フェーズ2と3の移行後に実行する |
+
+## 6. 再実行の結果（2026-11-07、Linux aarch64のEC2）
+
+フェーズ1の完了確認として、別の環境で再実行した。AWSアカウント識別子、ARN、認証情報は記録しない。
+
+| 層 | 内容 | 結果 |
+| --- | --- | --- |
+| unit | `sh tests/m09-execution-and-ci.sh unit` | 215件中215件通過 |
+| smoke（実Docker） | `sh tests/m09-execution-and-ci.sh smoke` | 11件中11件通過（単独137秒、品質ゲート内115秒） |
+| Markdown検査 | `npm run -s lint:md`（Node v22、markdownlint-cli2 0.24.0） | 73ファイル、指摘0件 |
+| 品質ゲート | `sh scripts/quality-gate.sh` | 失敗（下記の環境要因のみ） |
+| 後始末 | `swsc.managed=true`のコンテナ | 0件 |
+
+### 品質ゲートの失敗の内訳
+
+| 項目 | 原因 | 判定 |
+| --- | --- | --- |
+| `docker-compose config --quiet` | この環境に`docker-compose`が無い | 環境要因。本Issueで削除する項目（T2621）。成功とは断定しない |
+| `markdownlint-cli2`未導入 | 初回は`node`と`npm`が無かった | 解消済み。Node v22を導入し、`npm ci`の後に`lint:md`が通過 |
+
+品質ゲートの全体通過は、`docker-compose`を使える環境、またはT2621でCompose項目を削除した後に確認する。
+未実行の層は、次のとおりである。
+
+- contract（フェーズ4のCIで実行する）
+- M04とM06の実機smoke（フェーズ2と3の移行後に実行する。T2604のこの部分は未完了で、3章の関数の直接確認で代えた）
+
+unitの件数は、2章が214件、この章が215件である。1件の増加の原因は未確認である。
+
+## 7. コミット前の必須レビュー（2026-11-07）
+
+スキルごとに独立したサブエージェント（Claude Sonnet 5.5、effort medium）で、直列に実行した。
+対象は6章の追記と、フェーズ1の実装（`scripts/e2e-lib.sh`、`.github/workflows/e2e-test.yml`など）である。
+
+| レビュー | 結果 | 対応 |
+| --- | --- | --- |
+| `evidence-code-review` | Critical・High・Mediumなし。SHOULD 1件、NITS 1件 | 6章の未実行の層（M04・M06の実機smoke）の追記、unit件数の差の注記で解消 |
+| `security-review` | Critical・High・Mediumなし。Low 1件 | 対応しない。固定ロックパス（`/tmp`直下）は、共有マルチユーザー環境の可用性だけの低下で、CIと単一利用者の端末では実害がない。必要なら`SWSC_LOCK_DIR`の既定値を利用者専用にする（フェーズ2以降で検討） |
+
+確認していない範囲は、収集物のマスク規則の網羅性と、`tests/m09-execution-and-ci.sh`、`scripts/quality-gate.sh`の全行である。
+`evidence-code-review`の指摘はSHOULDとNITSだけで、再レビューの対象に当たらない。
