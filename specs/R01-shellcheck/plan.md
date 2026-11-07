@@ -505,5 +505,7 @@ miseの版を上げるときは、`min_version`、CIの`version`、`sha256`を�
   - CIで`mise.toml`の内容の制限を確かめる検査は、mise-actionが設定を自動で信頼した後のunit stepで動く。この検査は事後の検知であり、防御の本体はjobの権限（`contents: read`、Secretsを使わない）とレビューである。`pull_request_target`へ変えないこと、`permissions`を広げないことを、`docs/ローカル実行とCI.md`の限界の記述に書く（T-R0143）。
   - ローカルでmise本体を照合するときは、同じリリースの`SHASUMS256.txt`だけに頼らない。`docs/ローカル実行とCI.md`に、CIの`sha256`と同じ固定の4つの値（環境ごと）を載せ、その値と照合する手順にする（T-R0143）。
   - mise-actionの`github_token`の入力は、既定で`${{ github.token }}`をmiseへ渡す。PRの`mise.toml`のコードから、読み取り専用で短命のトークンが見える。5.4節の「Secretsを読まない」はこの点を除く意味であり、文書にこの点を書く。既定の挙動と、止められるかをT-R0153で確かめる。
-  - ローカルで信頼していない`mise.toml`（別のブランチやPRを取得したとき）に対して、`mise current`と`mise which`がどう動くか（エラーか、自動の信頼か）を、T-R0106の実機の確認に含める。手順書にも「差分を確かめるまで`mise trust`しない」と書く（T-R0143）。
+  - ローカルで信頼していない`mise.toml`（別のブランチやPRを取得したとき）に対して、
+    `mise current`と`mise which`がどう動くか（エラーか、自動の信頼か）を、T-R0106の実機の確認に含める。
+    手順書にも「差分を確かめるまで`mise trust`しない」と書く（T-R0143）。
   - `install_args: --locked shellcheck`の受け付けと、`--locked`が重複しないことは、T-R0153で初回CIの前に確かめる。
