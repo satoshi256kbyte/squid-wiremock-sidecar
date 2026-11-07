@@ -1,7 +1,7 @@
 #!/bin/sh
 # M07 の検査入口。
 # unit は scripts/scenario-lib.sh の関数とマッピングの構成を、Docker を使わずに確かめる。
-# smoke は unit に続けて、WireMock を Compose で起動し、リセットと確認を実機で確かめる（T706）。
+# smoke は unit に続けて、新基盤（taskdef）で WireMock と Squid を起動し、リセットと確認を実機で確かめる（T706）。
 set -eu
 
 ROOT=$(cd "$(dirname "$0")/.." && pwd)
@@ -19,10 +19,17 @@ esac
 cd "$ROOT"
 # 読み込みに副作用はない。関数を試験ごとに呼ぶために、ここで読み込む。
 . "$ROOT/scripts/scenario-lib.sh"
+# 新基盤の共通部品（ロック、起動、Client 実行、停止）。読み込みに副作用はない。
+# Why: smoke が swsc_lock_enter、swsc_start_main などを使うため。
+SWSC_ROOT=$ROOT
+# shellcheck source=/dev/null
+. "$ROOT/scripts/e2e-lib.sh"
+# shellcheck source=/dev/null
+. "$ROOT/scripts/e2e-runner.sh"
 
 failures=0
 total=0
-# 一時ファイルは unit でも smoke でも使う。Compose は起動しないので、削除だけを trap で行う。
+# 一時ファイルは unit でも smoke でも使う。unit は docker を起動しないので、削除だけを trap で行う。
 tmp_root=$(mktemp -d)
 trap 'rm -rf "$tmp_root"' EXIT
 
@@ -243,17 +250,17 @@ PY
   fi
 }
 
-# unit は Docker と Compose を呼ばず、Compose の trap も登録しない。
-# 偽の docker と docker-compose を PATH の先頭に置き、呼ばれたら記録する。
+# unit は docker を呼ばず、後始末の trap も登録しない。
+# 偽の docker を PATH の先頭に置き、呼ばれたら記録する。
 # 入れ子の unit 実行では、この検査を飛ばして再帰を防ぐ（M07_NESTED）。
-unit_no_compose() {
+unit_no_docker() {
   if [ -n "${M07_NESTED:-}" ]; then
     return 0
   fi
   _shim="$tmp_root/shim"
   _calls="$tmp_root/calls"
   mkdir -p "$_shim"
-  for _cmd in docker docker-compose; do
+  for _cmd in docker; do
     printf '#!/bin/sh\necho %s >>"%s"\nexit 99\n' "$_cmd" "$_calls" >"$_shim/$_cmd"
     chmod +x "$_shim/$_cmd"
   done
@@ -266,7 +273,7 @@ unit_no_compose() {
     record_fail "unit が Docker なしで成功する（rc=${_rc}）"
   fi
   if [ -e "$_calls" ]; then
-    record_fail "unit が docker か docker-compose を呼んだ"
+    record_fail "unit が docker を呼んだ"
   fi
 }
 
@@ -364,8 +371,15 @@ unit_verify_reset_journal() {
     verify_with "$_internal" "$_bad_scn" 1
 }
 
+# INT と TERM の終了コード（130、143）と、子の起動の検査が本体にあることを静的に確かめる。
+# Why: 信号の実機の検査は smoke にある。取り違えは unit でも気付けるように、宣言を見ておく。
+unit_signal_exit_codes() {
+  grep -Fq "trap 'exit 130' INT" "$SELF" && grep -Fq "trap 'exit 143' TERM" "$SELF" \
+    && grep -Fq "smoke_case_signal INT 130" "$SELF" && grep -Fq "smoke_case_signal TERM 143" "$SELF"
+}
+
 unit_main() {
-  unit_verify_reset_journal
+  check "m07_reset_excludes_internal: 内部要求を除き、テストの通信だけを数える" unit_verify_reset_journal
   check "文書の追加手順（JSON例が解決と静的検査を通る）" unit_doc_add_procedure
   check "文書の内容（並列禁止の節、識別情報の不在、README のリンク）" unit_doc_content
   unit_name_resolution
@@ -373,7 +387,8 @@ unit_main() {
   unit_name_conflict
   unit_static_check
   check "状態遷移の2ファイル" unit_state_machine_files
-  check "Compose を呼ばない" unit_no_compose
+  check "Docker を呼ばない" unit_no_docker
+  check "m07_signal_exit_codes: INT は130、TERM は143" unit_signal_exit_codes
 
   if [ "$failures" -ne 0 ]; then
     printf 'M07 unit: %s of %s checks failed\n' "$failures" "$total" >&2
@@ -386,41 +401,39 @@ unit_main
 
 smoke_wiremock_url=${WIREMOCK_URL:-http://127.0.0.1:8080}
 
-# WireMock と Squid を Compose で起動し、リセット、対照実験、通し実行を行う（T707、plan.md 6.2）。
-# 起動と後始末は M06 の run_smoke と同じ方式。後始末の trap は元の終了コードを保つ。
+# WireMock と Squid を新基盤（taskdef）で起動し、リセット、対照実験、通し実行を行う（T707、plan.md 6.2）。
+# 起動、収集、停止は共通の入口（swsc_start_main、swsc_collect、swsc_stop）に任せる。
+# 後始末の trap は元の終了コードを保つ。
 smoke_wiremock_url=${WIREMOCK_URL:-http://127.0.0.1:8080}
-smoke_proxy_url=${PROXY_URL:-http://127.0.0.1:3128}
+smoke_client_url="http://api.example.com"
 export WIREMOCK_URL="$smoke_wiremock_url"
 
 smoke_dir="$tmp_root/smoke"
 mkdir -p "$smoke_dir"
 
-# test-client を1回だけ実行する。標準出力と標準エラーは別々に残し、終了コードは client_rc へ入れる。
-smoke_client() { # docker-compose run に渡す -e 指定
+# Client を1回だけ実行する。標準出力と標準エラーは別々に残し、終了コードは client_rc へ入れる。
+# Why: Squid の 3128 はホストへ公開しないため、proxy を通す要求は必ず Client から送る。
+# 環境変数は NAME=VALUE の引数で渡す。Why: 値をシェルの文字列へ連結しないため。
+smoke_client() { # NAME=VALUE...
   client_rc=0
-  docker-compose run --rm --no-deps "$@" test-client \
-    >"$smoke_dir/out" 2>"$smoke_dir/err" || client_rc=$?
+  swsc_client_once_env "$SWSC_E2E_DIR/run" "$$" "$smoke_client_url" \
+    "$smoke_dir/out" "$smoke_dir/err" "$@" || client_rc=$?
+}
+
+# Client を経路1つで実行し、最終の CLIENT_STATUS を返す。
+smoke_client_status() { # 経路
+  smoke_client TEST_API_PATH="$1"
+  sed -n 's/^CLIENT_STATUS=//p' "$smoke_dir/out" | head -n 1
 }
 
 # WireMock の管理APIで、パス一致の呼び出し件数だけを読む。ジャーナルのリセットはしない。
 wiremock_count() { # URLパス
-  _body=$(printf '{"method":"GET","url":"%s"}' "$1")
-  _res=$(curl --fail --silent --show-error --connect-timeout 2 --max-time 10 -H 'Content-Type: application/json' \
-    -d "$_body" "$smoke_wiremock_url/__admin/requests/count") || return 1
-  _n=$(printf '%s' "$_res" | sed -n 's/.*"count" *: *\([0-9][0-9]*\).*/\1/p')
-  [ -n "$_n" ] || return 1
-  printf '%s' "$_n"
+  swsc_wiremock_count_path "$1"
 }
 
-# 対象のパスへ直接 HTTP ステータスを読む。Squid は使わない。
+# 対象のパスへ直接 HTTP ステータスを読む。WireMock の管理外の経路を、Squid を通さずに見る。
 smoke_status() { # URLパス
   curl --connect-timeout 2 --max-time 10 --silent --output /dev/null --write-out '%{http_code}' "$smoke_wiremock_url$1" || true
-}
-
-# Squid 経由で api.example.com のパスへ要求し、HTTP ステータスを読む。
-smoke_via_proxy() { # URLパス
-  curl --noproxy '' --proxy "$smoke_proxy_url" --connect-timeout 2 --max-time 15 --silent --output /dev/null \
-    --write-out '%{http_code}' "http://api.example.com$1" || true
 }
 
 smoke_reset_verify() {
@@ -452,24 +465,24 @@ smoke_control() {
 # Test Client の通し実行（検査4、5）。リセットを挟んでから実行し、500 のあと 200 で総試行2回。
 smoke_recovered_run() {
   wiremock_reset || return 1
-  smoke_client -e TEST_API_PATH=/api/error-500-then-200
+  smoke_client TEST_API_PATH=/api/error-500-then-200
   [ "$client_rc" -eq 0 ] \
     && grep -qx 'CLIENT_STATUS=200' "$smoke_dir/out" \
     && grep -Fq 'CLIENT_DIAG result=success attempts=2 status=200' "$smoke_dir/err"
 }
 
-# 4シナリオの応答と、Squid 経由の到達（検査6）。
+# 4シナリオの応答と、Squid 経由の到達（検査6）。Client から送る。
 smoke_scenarios() {
-  [ "$(smoke_via_proxy /api/users/123)" = 200 ] \
-    && [ "$(smoke_via_proxy /api/ratelimit)" = 429 ] \
-    && [ "$(smoke_via_proxy /api/slow-100)" = 200 ] \
-    && [ "$(smoke_via_proxy /api/slow-5000)" = 200 ]
+  [ "$(smoke_client_status /api/users/123)" = 200 ] \
+    && [ "$(smoke_client_status /api/ratelimit)" = 429 ] \
+    && [ "$(smoke_client_status /api/slow-100)" = 200 ] \
+    && [ "$(smoke_client_status /api/slow-5000)" = 200 ]
 }
 
 # ratelimit-429 の待機2秒と呼び出し回数（検査7）。呼び出し回数は診断の試行回数と一致する。
 smoke_ratelimit() {
   _before=$(wiremock_count /api/ratelimit) || return 1
-  smoke_client -e TEST_API_PATH=/api/ratelimit
+  smoke_client TEST_API_PATH=/api/ratelimit
   _after=$(wiremock_count /api/ratelimit) || return 1
   _attempts=$(sed -n 's/.*result=retries_exhausted attempts=\([0-9][0-9]*\) status=429.*/\1/p' "$smoke_dir/err")
   [ -n "$_attempts" ] \
@@ -495,21 +508,23 @@ smoke_checks() {
 }
 
 # 起動、準備完了の待機、後始末。M06 の run_smoke と同じ方式。
+# Why: ロックはトップレベルで1回だけ取る。失敗経路の子は SWSC_LOCK_HELD=1 を渡して取り直さない。
 smoke_run() {
+  swsc_lock_enter || exit 1
   cleanup() {
     rc=$?
-    if [ "$rc" -ne 0 ]; then
-      docker-compose logs --no-color squid wiremock >&2 || true
-    fi
-    # 後始末でもリセットを試みる（FR-708）。失敗しても Compose の回収は続ける。
+    # Why: 失敗時だけ収集する。成功時は環境を残さず、終了コードは本体の結果のまま返す。
+    if [ "$rc" -ne 0 ]; then swsc_collect || true; fi
+    # 後始末でもリセットを試みる（FR-708）。失敗しても停止と解放は続ける。
     printf 'cleanup: reset attempted\n' >&2
     if wiremock_reset; then
       printf 'cleanup: reset ok\n' >&2
     else
       printf 'cleanup: reset failed (ignored)\n' >&2
     fi
-    docker-compose down --remove-orphans >/dev/null 2>&1 || true
-    rm -rf "$tmp_root"
+    swsc_stop || true
+    rm -rf "$tmp_root" || true
+    swsc_lock_leave || { [ "$rc" -ne 0 ] || rc=1; }
     exit "$rc"
   }
   trap cleanup EXIT
@@ -517,10 +532,7 @@ smoke_run() {
   trap 'exit 130' INT
   trap 'exit 143' TERM
 
-  # 前回の残りが別の結果を混ぜないように、開始前にも落としておく。
-  docker-compose down --remove-orphans >/dev/null 2>&1 || true
-  docker-compose up -d --build squid wiremock >/dev/null
-  docker-compose build test-client >/dev/null
+  swsc_start_main
 
   _i=0
   until curl --fail --silent --show-error --max-time 5 "$smoke_wiremock_url/__admin/mappings" >/dev/null 2>&1; do
@@ -528,10 +540,9 @@ smoke_run() {
     [ "$_i" -lt 60 ] || { printf 'FAIL: WireMock の管理APIが準備できない\n' >&2; exit 1; }
     sleep 1
   done
-  # Squid 経由で WireMock に届くまで待つ。502 を成功扱いにしないため --fail を付け、本文も見る。
+  # Squid 経由の準備は Client で確かめる。Squid の待ち受けは swsc_start_main が確かめ、ホストからは送らない。
   _i=0
-  until _body=$(curl --fail --noproxy '' --proxy "$smoke_proxy_url" --silent --show-error --max-time 5 \
-    'http://api.example.com/api/users/123') && printf '%s' "$_body" | grep -Fq '"id": 123'; do
+  until [ "$(smoke_client_status /api/users/123)" = 200 ]; do
     _i=$((_i + 1))
     [ "$_i" -lt 60 ] || { printf 'FAIL: Squid 経由の疎通が準備できない\n' >&2; exit 1; }
     sleep 1
@@ -539,9 +550,9 @@ smoke_run() {
 
   smoke_checks
 
-  # 後始末の確認: Compose の残存がないこと。
-  docker-compose down --remove-orphans >/dev/null 2>&1 || true
-  check "終了後に Compose の残存がない" sh -c '[ -z "$(docker-compose ps -a -q)" ]'
+  # 後始末の確認: 停止のあと、管理対象（接頭辞とラベルの両方に一致）が残っていないこと。
+  swsc_stop || exit 1
+  check "終了後に管理対象の残存がない" swsc_check_managed_empty
   # 失敗経路は子の検査入口を起動するため、親のスタックを畳んでから行う。
   # 子の中では行わない（子が自分の失敗経路をさらに起動する再帰を防ぐ）。
   if [ -z "${M07_NESTED:-}" ]; then
@@ -552,15 +563,16 @@ smoke_run() {
 # 失敗経路（検査8、plan.md 6.3）。本物の検査入口を子として起動し、後始末を確かめる。
 # 本番のスクリプトに注入用の分岐は入れない。
 smoke_clean_after() { # 子の一時ディレクトリ
-  [ -z "$(ls -A "$1")" ] && [ -z "$(docker-compose ps -a -q)" ]
+  [ -z "$(ls -A "$1")" ] && swsc_check_managed_empty
 }
 
 # アサーション失敗の代わりに、WireMock の管理APIに届かない宛先を渡す。
 # 準備完了の待ちが時間切れで終わり、終了コード1で止まる。後始末のリセットは失敗する。
+# Why: 親がロックを持つので、子は SWSC_LOCK_HELD=1 で取り直さない。
 smoke_case_assert() {
   _t=$(mktemp -d "$tmp_root/child.XXXXXX") || return 1
   _rc=0
-  env WIREMOCK_URL=http://127.0.0.1:9 M07_NESTED=1 TMPDIR="$_t" sh "$SELF" smoke \
+  env WIREMOCK_URL=http://127.0.0.1:9 M07_NESTED=1 SWSC_LOCK_HELD=1 TMPDIR="$_t" sh "$SELF" smoke \
     >/dev/null 2>"$smoke_dir/child-assert.err" || _rc=$?
   [ "$_rc" -eq 1 ] \
     && grep -Fq 'cleanup: reset attempted' "$smoke_dir/child-assert.err" \
@@ -581,7 +593,8 @@ import urllib.request
 
 self_path, sig_name, admin, tmp_parent, err_path = sys.argv[1:6]
 sig = {"INT": signal.SIGINT, "TERM": signal.SIGTERM}[sig_name]
-env = dict(os.environ, M07_NESTED="1", TMPDIR=tmp_parent)
+# Why: 親が持つロックを子が取り直さないよう、SWSC_LOCK_HELD=1 を渡す（test:ci と同じ規約）。
+env = dict(os.environ, M07_NESTED="1", SWSC_LOCK_HELD="1", TMPDIR=tmp_parent)
 
 def restore_default_signals():
     for s in (signal.SIGINT, signal.SIGTERM):
@@ -593,7 +606,7 @@ def note(message):
 
 def stop_child(proc):
     # 準備できなかった子も、信号で止めて後始末を走らせる。
-    # Why not proc.kill(): SIGKILL は子のトラップを走らせず、Compose のスタックが残るため。
+    # Why not proc.kill(): SIGKILL は子のトラップを走らせず、管理対象の資源が残るため。
     proc.send_signal(signal.SIGTERM)
     try:
         proc.wait(timeout=60)
@@ -643,8 +656,8 @@ PY
 # Why: 子の標準エラーと一時ディレクトリは、検査の後始末で消える。外れた時点で残さないと、事後に確かめられない。
 smoke_signal_diag() { # 信号名 子の終了コード 期待する終了コード 子の一時ディレクトリ
   printf 'DIAG: %s: 子の終了コード=%s 期待=%s\n' "$1" "$2" "$3" >&2
-  printf 'DIAG: %s: 一時ディレクトリの残り=[%s] Compose の残存=%s件\n' "$1" \
-    "$(ls -A "$4" 2>/dev/null | tr '\n' ' ')" "$(docker-compose ps -a -q 2>/dev/null | wc -l | tr -d ' ')" >&2
+  printf 'DIAG: %s: 一時ディレクトリの残り=[%s] 管理対象の残存=%s件\n' "$1" \
+    "$(ls -A "$4" 2>/dev/null | tr '\n' ' ')" "$(docker ps -a -q --filter "label=$SWSC_LABEL" 2>/dev/null | wc -l | tr -d ' ')" >&2
   printf 'DIAG: %s: 子の標準エラーの末尾 20 行\n' "$1" >&2
   grep -v 'Making directories' "$smoke_dir/child-$1.err" 2>/dev/null | tail -n 20 | sed 's/^/  | /' >&2 || true
 }

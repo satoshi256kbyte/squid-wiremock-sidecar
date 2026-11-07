@@ -472,6 +472,50 @@ swsc_test_ci_main() {
   exit "$_rc"
 }
 
+# test:ci の名前指定。M08 の代表4シナリオから選んだものだけを、test:ci のロックの下で実行する。
+# Why: 起動、実行、収集、停止は tests/m08-e2e-suite.sh が持つ。ここは名前の検査、ロック、子への引き渡しだけを行う。
+# Why: 子には SWSC_LOCK_HELD=1 を渡し、ロックを二重に取らない（test:ci の規約）。
+swsc_test_ci_scenarios() { # シナリオ名...
+  for _n in "$@"; do
+    case $_n in
+      normal | error-500-then-200 | ratelimit-429 | slow-5000) ;;
+      *)
+        printf 'FAIL: 不明なシナリオ: %s（normal、error-500-then-200、ratelimit-429、slow-5000 から選ぶ）\n' "$_n" >&2
+        return 2
+        ;;
+    esac
+  done
+  swsc_lock_enter || return 1
+  # Why: 子はバックグラウンドで起動して wait する。前景で動かすと、sh は子が終わるまで trap を処理せず、
+  # 親だけが TERM で止められたときにロックが残り、子が孤児になるため（evidence-code-review の MUST）。
+  # 信号を受けたら子へ TERM を送り、子の後始末（collect、stop）を待ってからロックを解放する。
+  _swsc_ci_child=
+  trap '_swsc_ci_stop_child; exit 130' INT
+  trap '_swsc_ci_stop_child; exit 143' TERM
+  trap '_t=$?; _swsc_ci_stop_child; swsc_lock_leave || [ "$_t" -ne 0 ] || _t=1; exit "$_t"' EXIT
+  swsc_test_ci_scenarios_child "$@" &
+  _swsc_ci_child=$!
+  _rc=0
+  wait "$_swsc_ci_child" || _rc=$?
+  _swsc_ci_child=
+  exit "$_rc"
+}
+
+# test:ci の名前指定の子。M08 の smoke を、親のロックの下（SWSC_LOCK_HELD=1）で動かす。
+# Why: 関数に分けるのは、unit で子を差し替えて、信号とロックの扱いだけを確かめるため。
+swsc_test_ci_scenarios_child() { # シナリオ名...
+  SWSC_LOCK_HELD=1 exec sh "$SWSC_ROOT/tests/m08-e2e-suite.sh" smoke "$@"
+}
+
+# 子が動いていれば TERM を送り、終わるまで待つ。動いていなければ何もしない。冪等。
+_swsc_ci_stop_child() {
+  if [ -n "${_swsc_ci_child:-}" ]; then
+    kill -TERM "$_swsc_ci_child" 2>/dev/null || true
+    wait "$_swsc_ci_child" 2>/dev/null || true
+    _swsc_ci_child=
+  fi
+}
+
 # 停止。接頭辞とラベルの両方が一致するものだけを、依存の順に消す。冪等（対象が無ければ0）。
 swsc_stop() {
   swsc_runner_remove_managed

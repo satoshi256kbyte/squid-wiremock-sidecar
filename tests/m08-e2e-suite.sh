@@ -1,7 +1,7 @@
 #!/bin/sh
 # M08 代表4シナリオの E2E スイートの検査入口。
 # unit は Docker を使わず、シナリオ表、実測値の抽出、実行ループ、レポートをスタブで確かめる。
-# smoke は unit に続けて Compose で実通信する（T806 以降で実装する）。
+# smoke は unit に続けて新基盤（taskdef）で実通信する（T806 以降で実装する）。
 set -eu
 
 # 管理APIは常にループバックの WireMock だけを指す。Why: 環境変数で他者の WireMock へ reset を
@@ -28,6 +28,12 @@ else
   ROOT=$(cd "$(dirname "$0")/.." && pwd)
 fi
 SELF="$ROOT/tests/m08-e2e-suite.sh"
+# 新基盤の共通部品（名前の定数、Client 実行、起動、停止）。Why: 実通信は swsc_client_once_env と swsc_start_main を通すため。
+SWSC_ROOT=$ROOT
+# shellcheck source=/dev/null
+. "$ROOT/scripts/e2e-lib.sh"
+# shellcheck source=/dev/null
+. "$ROOT/scripts/e2e-runner.sh"
 
 # 既定の実行順。slow-5000 を最後に置くのは、遅れた記録を次のシナリオのリセット確認に混ぜないため。
 E2E_ORDER="normal error-500-then-200 ratelimit-429 slow-5000"
@@ -55,11 +61,11 @@ rc_is() { # 期待終了コード コマンド...
   [ "$_rc" -eq "$_want" ]
 }
 
-# docker と docker-compose の代わりに置く偽物。呼ばれたら記録し、失敗させる。
+# docker の代わりに置く偽物。呼ばれたら記録し、失敗させる。
 # Why: unit で Docker を呼ばないことを、呼び出しの記録で確かめるため。
 make_shim() { # 作業ディレクトリ
   mkdir -p "$1/shim"
-  for _cmd in docker docker-compose; do
+  for _cmd in docker; do
     printf '#!/bin/sh\necho %s >>"%s"\nexit 99\n' "$_cmd" "$1/calls" >"$1/shim/$_cmd"
     chmod +x "$1/shim/$_cmd"
   done
@@ -164,11 +170,11 @@ unit_arg_codes() {
   rc_is 2 env PATH="$_d/shim:$PATH" sh "$SELF" unit normal || return 1
   rc_is 2 env PATH="$_d/shim:$PATH" sh "$SELF" smoke no-such || return 1
   rc_is 2 env PATH="$_d/shim:$PATH" sh "$SELF" smoke slow-100 || return 1
-  # 引数の誤りは Compose の起動より前に止まる。
+  # 引数の誤りは起動より前に止まる。
   [ ! -e "$_d/calls" ]
 }
 
-unit_no_compose() {
+unit_no_docker() {
   # 入れ子の unit 実行では、この検査を飛ばして再帰を防ぐ（M08_NESTED）。
   if [ -n "${M08_NESTED:-}" ]; then
     return 0
@@ -261,15 +267,18 @@ unit_dash_not_called() {
 # run_client は、パスを TEST_API_PATH で渡し、上書き設定を -e で渡す。
 unit_run_client_args() {
   _d="$WORK/rc-args"
-  mkdir -p "$_d/shim" "$_d/out"
-  printf '#!/bin/sh\nprintf "%%s\\n" "$@" >"%s"\nexit 28\n' "$_d/args" >"$_d/shim/docker-compose"
-  chmod +x "$_d/shim/docker-compose"
+  mkdir -p "$_d/shim" "$_d/out" "$_d/run"
+  # Why: swsc_client_once は起動情報のファイル（イメージ名より後ろの引数）を読むため、同じ名前で作る。
+  printf 'swsc-client:e2e\n' >"$_d/run/swsc-client-$$.args"
+  printf '#!/bin/sh\nprintf "%%s\\n" "$@" >"%s"\nexit 28\n' "$_d/args" >"$_d/shim/docker"
+  chmod +x "$_d/shim/docker"
   _rc=0
-  ( PATH="$_d/shim:$PATH"; run_client /api/slow-5000 RESPONSE_TIMEOUT_SECONDS=1 "$_d/out" ) || _rc=$?
+  ( PATH="$_d/shim:$PATH"; SWSC_E2E_DIR="$_d" run_client /api/slow-5000 RESPONSE_TIMEOUT_SECONDS=1 "$_d/out" ) || _rc=$?
   [ "$_rc" -eq 28 ] || return 1
   grep -Fxq 'TEST_API_PATH=/api/slow-5000' "$_d/args" || return 1
   grep -Fxq 'RESPONSE_TIMEOUT_SECONDS=1' "$_d/args" || return 1
-  grep -Fxq 'test-client' "$_d/args"
+  grep -Fxq 'TEST_API_BASE_URL=http://api.example.com' "$_d/args" || return 1
+  grep -Fxq 'swsc-client:e2e' "$_d/args"
 }
 
 # ---- unit: 実行ループ ----
@@ -381,8 +390,8 @@ unit_fail_detail() {
 unit_cleanup_reset() {
   _d="$WORK/cleanup-reset"
   mkdir -p "$_d/shim"
-  printf '#!/bin/sh\nif [ "$FAKE_RUNNING" = 1 ]; then echo cid-1; fi\nexit 0\n' >"$_d/shim/docker-compose"
-  chmod +x "$_d/shim/docker-compose"
+  printf '#!/bin/sh\nif [ "$FAKE_RUNNING" = 1 ]; then echo true; else echo false; fi\nexit 0\n' >"$_d/shim/docker"
+  chmod +x "$_d/shim/docker"
 
   ( M08_LIB_ONLY=1 M08_LIB_ROOT="$ROOT" . "$SELF"
     smoke_started=1
@@ -424,8 +433,8 @@ unit_doc() {
 unit_main() {
   check "引数: 不正なモード、unit への名前、未定義、対象外は終了コード2" unit_arg_codes
   check "既定の順は normal、error-500-then-200、ratelimit-429、slow-5000" unit_default_order
-  check "Compose を呼ばない（docker と docker-compose を PATH の先頭に置く）" unit_no_compose
-  check "シナリオ表（パス、期待値、上書き設定）" unit_scenario_table
+  check "Docker を呼ばない（docker を PATH の先頭に置く）" unit_no_docker
+  check "m08_scenario_expectations: シナリオ表（パス、期待値、上書き設定）" unit_scenario_table
   check "429の4と3が retry-lib の既定値と整合" unit_retry_defaults
   check "実測値の抽出（4種と、読めない項目は -）" unit_parse_client
   check "固有の検査（正しい例は通り、崩した例は落ちる）" unit_extra_checks
@@ -439,7 +448,7 @@ unit_main() {
   check "レポート: FAIL と NOT_RUN の件数と未実行の行" unit_report_mixed
   check "レポート: ファイルを作らない" unit_report_no_files
   check "失敗出力: 再現コマンドと診断ログ、認証情報の形がない" unit_fail_detail
-  check "後始末の reset: 実行中だけ送り、未実行なら skipped を出す" unit_cleanup_reset
+  check "m08_term_cleanup: 後始末の reset は実行中だけ送り、未実行なら skipped を出す（TERM の実機は smoke の signal-case）" unit_cleanup_reset
   check "文書: docs/E2Eテスト.md があり、README から参照され、4シナリオ名と禁止の形を含まない" unit_doc
 
   if [ "$failures" -ne 0 ]; then
@@ -580,14 +589,15 @@ extra_checks() { # 名前 標準出力 標準エラー
 
 # 1シナリオ分のクライアントを実行する。出力は出力先の out と err に分けて残す。
 # Why: 上書きの設定は -e で明示したものだけを渡す。ホストの環境変数は届かないため。
+# Why: 新基盤の共通入口を使う。Squid の 3128 はホストへ公開しないので、要求は Client から送る。
 run_client() { # パス 上書き設定（空可） 出力先
   _rc=0
   if [ -n "$2" ]; then
-    docker-compose run --rm --no-deps -e "TEST_API_PATH=$1" -e "$2" test-client \
-      >"$3/out" 2>"$3/err" || _rc=$?
+    swsc_client_once_env "$SWSC_E2E_DIR/run" "$$" "$SWSC_M08_CLIENT_URL" "$3/out" "$3/err" \
+      "TEST_API_PATH=$1" "$2" || _rc=$?
   else
-    docker-compose run --rm --no-deps -e "TEST_API_PATH=$1" test-client \
-      >"$3/out" 2>"$3/err" || _rc=$?
+    swsc_client_once_env "$SWSC_E2E_DIR/run" "$$" "$SWSC_M08_CLIENT_URL" "$3/out" "$3/err" \
+      "TEST_API_PATH=$1" || _rc=$?
   fi
   return "$_rc"
 }
@@ -715,52 +725,35 @@ fail_detail() { # 名前 パス 上書き設定 期待値 実測値 診断ログ
   sed 's/^/    /' "$6" >&2 || true
 }
 
-# ---- 実装: smoke（Compose の実通信、T806からT808） ----
+# ---- 実装: smoke（新基盤の実通信、T806からT808） ----
 
-# Compose の起動と後始末は、この検査入口だけが使う。プロジェクト名を固定し、他の stack と混ざらないようにする。
-# Why: 残存の確認（docker-compose ps -a -q）を、このスイートが作ったコンテナだけに限るため。
-smoke_project=m08-e2e
+# 起動、ポートの空き確認、停止は新基盤の入口（swsc_start_main、swsc_stop）に任せる。
+# Why: ポートの空き確認を個別に持つと、新基盤の入口と判定が食い違うため。
+# smoke_started は、起動が成功した後に立てる。失敗した起動の後に reset を送らないため。
 smoke_started=0
+# 起動の後、Client が送る先（Squid の 3128 を通る要求の宛先）。
+SWSC_M08_CLIENT_URL=http://api.example.com
 
-# 起動前に必要な2つのポートが空いているか。使用中なら起動せず 1 を返す。
-# Why: 他の stack の WireMock に対して reset や要求を送ると、他人の検査状態を壊すため。
-smoke_ports_free() {
-  python3 - <<'PY'
-import socket
-import sys
-
-for port in (3128, 8080):
-    sock = socket.socket()
-    sock.settimeout(1)
-    try:
-        sock.connect(("127.0.0.1", port))
-        sys.exit(1)
-    except OSError:
-        pass
-    finally:
-        sock.close()
-sys.exit(0)
-PY
-}
-
-# 前回の残りを落とし、起動し、準備完了まで待つ。失敗したら理由を標準エラーへ出して 1 を返す。
-# Why: smoke_started は、ポートを確かめた後に立てる。空いていないポートへは reset を送らないため。
+# 起動し、WireMock の管理APIが応答するまで待つ。Squid の待ち受けは swsc_start_main が確かめる。
+# Why: ホストから 3128 へ要求を送らない。Squid 経由の準備の確認は、最初の Client の実行で見える。
 smoke_up() {
-  docker-compose down --remove-orphans >/dev/null 2>&1 || true
-  if ! smoke_ports_free; then
+  smoke_started=0
+  if ! swsc_stop; then
+    printf 'FAIL: 既存の swsc- の停止に失敗した\n' >&2
+    return 1
+  fi
+  if ! swsc_check_ports_free "$SWSC_MOCK_PORT" "$SWSC_SQUID_PORT"; then
     printf 'FAIL: ポート 3128 か 8080 が使用中のため起動しない\n' >&2
     return 1
   fi
+  # Why: 空きを確かめた直後に立てる（移行前と同じ）。swsc_start_main は WireMock を Squid より先に起動するため、
+  # 途中で信号を受けても、後始末の reset を送れるようにする。空いていないポートへは reset を送らない。
   smoke_started=1
-  if ! docker-compose up -d --build squid wiremock >/dev/null; then
-    printf 'FAIL: docker-compose up が失敗した\n' >&2
+  if ! swsc_start_main; then
+    printf 'FAIL: 新基盤の起動に失敗した\n' >&2
     return 1
   fi
-  if ! docker-compose build test-client >/dev/null; then
-    printf 'FAIL: test-client のビルドが失敗した\n' >&2
-    return 1
-  fi
-
+  smoke_started=1
   _i=0
   until curl --fail --silent --show-error --max-time 5 "$WIREMOCK_URL/__admin/mappings" >/dev/null 2>&1; do
     _i=$((_i + 1))
@@ -770,27 +763,16 @@ smoke_up() {
     fi
     sleep 1
   done
-  # Squid 経由で WireMock に届くまで待つ。502 を成功扱いにしないため --fail と本文の両方を見る。
-  _i=0
-  until _body=$(curl --fail --noproxy '' --proxy http://127.0.0.1:3128 --silent --show-error --max-time 5 \
-    'http://api.example.com/api/users/123') && printf '%s' "$_body" | grep -Fq '"id": 123'; do
-    _i=$((_i + 1))
-    if [ "$_i" -ge 60 ]; then
-      printf 'FAIL: Squid 経由の疎通が準備できない\n' >&2
-      return 1
-    fi
-    sleep 1
-  done
 }
 
-# 後始末の reset。Why: 起動を始めていなければ確かめたポートは他人のものかもしれず、
+# 後始末の reset。Why: 起動を始めていなければ、確かめた宛先は他人のものかもしれず、
 # 実行中でなければ reset を送っても効果がなく、ログを誤解させるため、送らず理由だけ出す。
 cleanup_reset() {
   if [ "${smoke_started:-0}" -ne 1 ]; then
     printf 'cleanup: reset skipped (not started)\n' >&2
     return 0
   fi
-  if [ -z "$(docker-compose ps -q wiremock 2>/dev/null)" ]; then
+  if [ "$(docker inspect --format '{{.State.Running}}' "${SWSC_PREFIX}wiremock" 2>/dev/null || true)" != true ]; then
     printf 'cleanup: reset skipped (not running)\n' >&2
     return 0
   fi
@@ -803,15 +785,16 @@ cleanup_reset() {
 }
 
 # 終了時の後始末。順序は plan 6.1 のとおり。各処理の失敗は次へ進む（|| true）。
+# Why: 失敗時だけ収集する（test:ci の collect と同じ方針）。収集の失敗で終了コードを変えない。
 # Why: 元の終了コードを保つのは、失敗経路の検査（終了コード1、130、143）が後始末の後の値で判定するため。
+# ロックは自分が取ったときだけ解放する。子（SWSC_LOCK_HELD=1）では何もしない。
 smoke_cleanup() {
   _rc=$?
-  if [ "$_rc" -ne 0 ]; then
-    docker-compose logs --no-color --tail 100 squid wiremock >&2 || true
-  fi
+  if [ "$_rc" -ne 0 ]; then swsc_collect || true; fi
   cleanup_reset
-  docker-compose down --remove-orphans >/dev/null 2>&1 || true
-  rm -rf "$WORK"
+  swsc_stop || true
+  rm -rf "$WORK" || true
+  swsc_lock_leave || { [ "$_rc" -ne 0 ] || _rc=1; }
   exit "$_rc"
 }
 
@@ -902,17 +885,24 @@ smoke_inject_reset() {
 # ---- 実装: 失敗経路の子（6.3、子は M08_NESTED=1 で動く） ----
 
 smoke_clean_after() { # 子の一時ディレクトリ
-  [ -z "$(ls -A "$1")" ] && [ -z "$(docker-compose ps -a -q)" ]
+  [ -z "$(ls -A "$1")" ] && swsc_check_managed_empty
 }
 
-# Compose の起動失敗。COMPOSE_FILE に存在しないファイルを渡し、up を失敗させる。
-smoke_case_compose_fail() {
+# 起動の失敗。出力先に swsc が作っていない中身を置き、swsc_start_main を準備の前に止める。
+# Why: 親のロックの下で子を動かすため SWSC_LOCK_HELD=1 を渡す。子の起動失敗は親のスタックに触れない。
+smoke_case_start_fail() {
   _t=$(mktemp -d "$WORK/child.XXXXXX") || return 1
+  _occ=$(mktemp -d "$WORK/occupied.XXXXXX") || return 1
+  : >"$_occ/foreign.txt" || return 1
   _rc=0
-  env M08_NESTED=1 M08_TMP_ROOT="$_t" COMPOSE_FILE="$_t/no-such-compose.yml" \
-    sh "$SELF" smoke >/dev/null 2>"$WORK/child-compose.err" || _rc=$?
+  env M08_NESTED=1 M08_TMP_ROOT="$_t" SWSC_LOCK_HELD=1 SWSC_E2E_DIR="$_occ" \
+    sh "$SELF" smoke >/dev/null 2>"$WORK/child-start.err" || _rc=$?
+  rm -rf "$_occ" || true
+  # Why: 起動は WireMock を作る前に止まる。後始末は、WireMock が動いていないことを見て reset を送らない。
   [ "$_rc" -eq 1 ] \
-    && grep -Fq 'cleanup: reset skipped (not running)' "$WORK/child-compose.err" \
+    && grep -Fq 'FAIL: 新基盤の起動に失敗した' "$WORK/child-start.err" \
+    && grep -Fq 'cleanup: reset skipped (not running)' "$WORK/child-start.err" \
+    && ! grep -Fq 'cleanup: reset attempted' "$WORK/child-start.err" \
     && smoke_clean_after "$_t"
 }
 
@@ -931,7 +921,8 @@ import urllib.request
 
 self_path, sig_name, admin, tmp_parent, err_path = sys.argv[1:6]
 sig = {"INT": signal.SIGINT, "TERM": signal.SIGTERM}[sig_name]
-env = dict(os.environ, M08_NESTED="1", M08_TMP_ROOT=tmp_parent)
+# Why: 親が持つロックを子が取り直さないよう、SWSC_LOCK_HELD=1 を渡す（test:ci と同じ規約）。
+env = dict(os.environ, M08_NESTED="1", SWSC_LOCK_HELD="1", M08_TMP_ROOT=tmp_parent)
 
 
 def restore_default_signals():
@@ -946,7 +937,7 @@ def note(message):
 
 def stop_child(proc):
     # 準備できなかった子も、信号で止めて後始末を走らせる。
-    # Why not proc.kill(): SIGKILL は子のトラップを走らせず、Compose のスタックが残るため。
+    # Why not proc.kill(): SIGKILL は子のトラップを走らせず、管理対象の資源が残るため。
     proc.send_signal(signal.SIGTERM)
     try:
         proc.wait(timeout=60)
@@ -997,8 +988,8 @@ PY
 # Why: 子の標準エラーと一時ディレクトリは、検査の後始末で消える。外れた時点で残さないと、事後に確かめられない。
 smoke_signal_diag() { # 信号名 子の終了コード 期待する終了コード 子の一時ディレクトリ
   printf 'DIAG: %s: 子の終了コード=%s 期待=%s\n' "$1" "$2" "$3" >&2
-  printf 'DIAG: %s: 一時ディレクトリの残り=[%s] Compose の残存=%s件\n' "$1" \
-    "$(ls -A "$4" 2>/dev/null | tr '\n' ' ')" "$(docker-compose ps -a -q 2>/dev/null | wc -l | tr -d ' ')" >&2
+  printf 'DIAG: %s: 一時ディレクトリの残り=[%s] 管理対象の残存=%s件\n' "$1" \
+    "$(ls -A "$4" 2>/dev/null | tr '\n' ' ')" "$(docker ps -a -q --filter "label=$SWSC_LABEL" 2>/dev/null | wc -l | tr -d ' ')" >&2
   printf 'DIAG: %s: 子の標準エラーの末尾 20 行\n' "$1" >&2
   grep -v 'Making directories' "$WORK/child-$1.err" 2>/dev/null | tail -n 20 | sed 's/^/  | /' >&2 || true
 }
@@ -1034,7 +1025,7 @@ smoke_reset_verify() {
 
 # 失敗経路。親のスタックを畳んでから行う（M07 と同じ）。子の中では行わない（再帰を防ぐ）。
 smoke_failure_path() {
-  check "Compose 起動失敗: 終了コード1、リセットを試み、残存と一時ディレクトリがない" smoke_case_compose_fail
+  check "起動失敗: 終了コード1、リセットは試みず、残存と一時ディレクトリがない" smoke_case_start_fail
   check "INT: 終了コード130、リセットを試み、残存と一時ディレクトリがない" smoke_case_signal INT 130
   check "TERM: 終了コード143、リセットを試み、残存と一時ディレクトリがない" smoke_case_signal TERM 143
 }
@@ -1042,10 +1033,11 @@ smoke_failure_path() {
 # 引数があれば、そのシナリオだけを1周実行して終了する（名前指定の再実行）。
 # 引数がなければ、4.2 の順に検査する。
 smoke_main() { # 名前...
+  # Why: ロックはトップレベルで1回だけ取る。取れなければ、他の実行の swsc- に触れずに止まる。
+  swsc_lock_enter || exit 1
   trap smoke_cleanup EXIT
   trap 'exit 130' INT
   trap 'exit 143' TERM
-  export COMPOSE_PROJECT_NAME="$smoke_project"
   # 既定の宛先を明示する。set -u のもとで、後始末と準備完了の待機が未定義の変数を読まないため。
   WIREMOCK_URL=${WIREMOCK_URL:-http://127.0.0.1:8080}
   export WIREMOCK_URL
@@ -1060,8 +1052,8 @@ smoke_main() { # 名前...
   smoke_checks
 
   # 終了後の残存確認。失敗経路の子が親のスタックを使う前に、畳んでおく。
-  docker-compose down --remove-orphans >/dev/null 2>&1 || true
-  check "終了後に Compose の残存がない" sh -c '[ -z "$(docker-compose ps -a -q)" ]'
+  swsc_stop || exit 1
+  check "終了後に管理対象の残存がない" swsc_check_managed_empty
   if [ -z "${M08_NESTED:-}" ]; then
     smoke_failure_path
   fi

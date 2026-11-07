@@ -152,6 +152,50 @@ t_entry_unknown_operation_exits_2() {
   must rc_is 2 run_e2e "$TMP/base" bogus
 }
 
+# S26 T2616: test:ci のシナリオ名は、ロックと docker の前に検査する。不明な名前は終了コード2。
+t_test_ci_unknown_scenario_exits_2_before_docker() {
+  make_base_bin "$TMP/base"
+  make_shims "$TMP/shim"
+  _r=0
+  run_e2e "$TMP/shim:$TMP/base" test:ci normal bogus >/dev/null 2>"$TMP/err" || _r=$?
+  must [ "$_r" -eq 2 ]
+  must grep -q '不明なシナリオ: bogus' "$TMP/err"
+  # docker の呼び出しは、前提検査（docker info など）以外に無いこと。
+  if [ -s "$TMP/rec-docker" ]; then
+    must sh -c "! grep -Eq 'docker (run|rm|build|network|ps)' '$TMP/rec-docker'"
+  fi
+  must [ ! -e "$UNIT_LOCK" ]
+}
+
+# S26 T2616: test:ci の名前指定。子の終了コードを返し、ロックを解放する。
+t_test_ci_scenarios_returns_child_rc_and_releases_lock() {
+  entry_setup || return 1
+  _rc=0
+  lib_call 'swsc_test_ci_scenarios_child() { [ "$SWSC_LOCK_HELD" = 1 ] && [ -d "$SWSC_LOCK_DIR" ] && echo "child $*" >>"$SWSC_TEST_SEQ"; return 3; }
+swsc_test_ci_scenarios normal slow-5000' >/dev/null 2>&1 || _rc=$?
+  must [ "$_rc" -eq 3 ]
+  must seq_is 'child normal slow-5000'
+  must [ ! -e "$UNIT_LOCK" ]
+}
+
+# S26 T2616: 親だけが TERM を受けても、子へ TERM を送り、子の後始末を待ってからロックを解放する。
+t_test_ci_scenarios_term_stops_child_and_releases_lock() {
+  entry_setup || return 1
+  _rc=0
+  lib_call 'swsc_test_ci_scenarios_child() {
+  trap '"'"'echo child-term >>"$SWSC_TEST_SEQ"; [ -d "$SWSC_LOCK_DIR" ] && echo lock-held >>"$SWSC_TEST_SEQ"; exit 143'"'"' TERM
+  echo child-start >>"$SWSC_TEST_SEQ"
+  kill -TERM "$PPID_PARENT"
+  i=0; while [ "$i" -lt 100 ]; do sleep 0.1; i=$((i + 1)); done
+  echo child-not-stopped >>"$SWSC_TEST_SEQ"
+}
+PPID_PARENT=$$
+swsc_test_ci_scenarios normal' >/dev/null 2>&1 || _rc=$?
+  must [ "$_rc" -eq 143 ]
+  must seq_is "$(printf 'child-start\nchild-term\nlock-held')"
+  must [ ! -e "$UNIT_LOCK" ]
+}
+
 t_logs_accepts_extra_arguments() {
   # docker を外したPATHで、引数の誤りではなく前提の不足（終了コード1）で止まることを確かめる。
   make_base_bin "$TMP/base"
@@ -3403,6 +3447,9 @@ run_unit() {
   check '.gitignoreに.e2e/とe2e-logs/がある' t_gitignore_hides_run_outputs
   check '操作なしは終了コード2' t_entry_without_operation_exits_2
   check '未知の操作は終了コード2' t_entry_unknown_operation_exits_2
+  check 'test:ci の不明なシナリオ名は、ロックと起動の前に終了コード2' t_test_ci_unknown_scenario_exits_2_before_docker
+  check 'test:ci の名前指定は、子の終了コードを返し、ロックを解放する' t_test_ci_scenarios_returns_child_rc_and_releases_lock
+  check 'test:ci の名前指定の TERM は143で、子を止めてからロックを解放する' t_test_ci_scenarios_term_stops_child_and_releases_lock
   check 'logsは追加の引数を受けても引数誤りにならない' t_logs_accepts_extra_arguments
   check 'startはdockerが無いと原因を示して止まる' t_start_without_docker_names_docker
   check 'contractは認証情報が無いと docker と aws を呼ばずに止まる' t_contract_without_credentials_stops_before_docker_and_aws
