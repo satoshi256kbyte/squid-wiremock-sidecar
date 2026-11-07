@@ -85,3 +85,14 @@ T2625（初回CI）で確かめること:
 | `test-ci` stepの時間 | `npm run test:ci`とM08の4シナリオの合計が、10分以内に収まること |
 | 失敗時のアーティファクト | `e2e-logs/`に、アカウントIDやARNが出ていないこと（`security-review`の要確認） |
 | 実AWS | 不要。CIのダミー認証情報の範囲に収まる |
+
+## 8. 初回CIの失敗と修正（2026-11-07、PR #29）
+
+| 項目 | 内容 |
+| --- | --- |
+| 結果 | `e2e`の`unit` stepが最初の検査で失敗した。後続のstepは実行されず、`test-ci`の所要時間は測れていない |
+| ログ | `find: '/tmp/tmp.X/swsc-lock-case.Y': No such file or directory`の2行と終了コード1 |
+| 原因 | M09のunitで、全体用のロック置き場（`UNIT_LOCK_BASE`）の既定が`$TMP`の中だった。`check()`が検査ごとに`$TMP`の中身を消すため置き場も消え、続く`find`が失敗して`set -e`で止まった。手元は`KIROCREW_SCRATCH`があり、置き場が`$TMP`の外にできるため隠れていた（フェーズ1から） |
+| 修正 | `lock_case_dir`の既定を`${KIROCREW_SCRATCH:-${TMPDIR:-/tmp}}`にする |
+| 確認 | 直す前の版は、`KIROCREW_SCRATCH`と`TMPDIR`を外したCIと同じ条件で同じエラーになった。直した版は同じ条件で223件全て通過し、`/tmp/swsc-lock-case.*`は残らなかった |
+| レビュー | `evidence-code-review`はCritical・High・Mediumなし、Low 1件（検査が途中で失敗すると、空の置き場が`/tmp`に1件残る。CIのランナーは使い捨てで、手元はscratchに置くため対応しない）。`security-review`は指摘0件 |

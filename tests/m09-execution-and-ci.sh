@@ -2999,7 +2999,9 @@ t_gate_m02_runs_in_gate_without_stack_note() {
 # T2601: ロックとポート確認の検査。ロックは実行専用の一時ディレクトリだけに置く。
 # Why: 実ホストの既定のロック（/tmp/swsc-e2e-ports.lock）を検査が作ると、利用中のロックと衝突するため。
 lock_case_dir() {
-  _lb=${KIROCREW_SCRATCH:-$TMP}
+  # Why: $TMP の中に置かない。check が検査ごとに $TMP の中身を消すため、全体用の置き場まで消え、
+  # 次の find が失敗して unit が止まる（KIROCREW_SCRATCH の無い CI で発生。手元では隠れていた）。
+  _lb=${KIROCREW_SCRATCH:-${TMPDIR:-/tmp}}
   mkdir -p "$_lb" || return 1
   mktemp -d "$_lb/swsc-lock-case.XXXXXX"
 }
