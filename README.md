@@ -16,7 +16,7 @@ Test Client → Squid Proxy (localhost:3128) → WireMock (Mock Server)
 
 ## Key Features
 
-- ✅ ECS サイドカー構成の完全再現（Docker Compose）
+- ✅ ECS サイドカー構成の完全再現（ECS タスク定義と、同じ namespace を共有するコンテナ）
 - ✅ 閉域ルーティング（Squid cache_peer 経由）
 - ✅ 異常系シミュレーション（HTTP 500/503/429、response delay）
 - ✅ 振る舞いのコード化（JSON mapping）
@@ -64,7 +64,7 @@ npm run stop
 ### Squid Proxy
 
 - フォワードプロキシ
-- 127.0.0.1:3128 でリッスン
+- pause コンテナと共有する namespace の中で 127.0.0.1:3128 をリッスン（ホストへは公開しない）
 - cache_peer で特定ドメインの通信を WireMock へ転送
 
 ### WireMock Mock Server
@@ -97,7 +97,8 @@ E2E スイートの実行方法、4シナリオの期待値、失敗時の見方
 ├── plan.md                    # 技術設計
 ├── tasks.md                   # 実装タスク
 ├── analyze.md                 # 整合性検査
-├── docker-compose.yml         # (実装後)
+├── ecs/                       # ECS タスク定義のテンプレートと Squid 設定
+├── scripts/                   # npm run の入口（e2e.sh）と品質ゲート
 ├── .gitignore
 │
 ├── docs/
@@ -133,8 +134,8 @@ E2E スイートの実行方法、4シナリオの期待値、失敗時の見方
 
 ## Prerequisites
 
-- Docker & Docker Compose (v2.0+)
-- Node.js 18+ （テスト実行時）
+- Docker（`docker run` で直接起動する。Compose は使わない）
+- Node.js 22+（`npm run` の入口と Markdown 検査）
 - curl（動作確認時）
 
 ## Implementation Roadmap
@@ -152,11 +153,11 @@ E2E スイートの実行方法、4シナリオの期待値、失敗時の見方
 
 ## Development Workflow
 
-下の「旧 Compose 手順」の pnpm 入口は提供しません（移行完了後に、手順ごと削除する）。
 現在の入口は、次の「新基盤の実行（npm run）」です。
+下の「旧 Compose 手順」は現行の手順ではありません。移行完了後に削除します（`docker-compose.yml` の削除（T2630）と同時）。
 
 ```bash
-# 旧 Compose 手順（移行完了後に削除する）
+# 旧 Compose 手順（docker-compose.yml の削除（T2630）と同時に削除する）
 # ローカルテスト（Colima 環境）
 export DOCKER_HOST=unix:///Users/satoshi/.colima/default/docker.sock
 pnpm start           # docker-compose up -d
@@ -177,7 +178,11 @@ npm run logs       # コンテナのログを表示する
 npm run stop       # 起動したコンテナとネットワークを削除する
 npm run clean      # stop に加えて生成物と収集ログを削除する
 npm run test:ci    # start、test、collect、stop を続けて実行する
+sh scripts/e2e.sh test:ci normal error-500-then-200 ratelimit-429 slow-5000  # M08 の4シナリオ（CI と同じ）
 ```
+
+固定ポート（8080、3128、4566）は、入口のロックで1つの実行だけに限る（既定は `/tmp/swsc-e2e-ports.lock`）。
+並列に実行しない。ロックの扱いは [ローカル実行とCI](docs/ローカル実行とCI.md) を参照する。
 
 ## CI/CD Integration
 

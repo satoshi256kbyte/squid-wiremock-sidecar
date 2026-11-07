@@ -2720,11 +2720,22 @@ t_wf_steps_run_in_plan_order() {
 
 t_wf_each_step_runs_its_command() {
   wf_block '- name: unit$' | grep -qxF '        run: sh tests/m09-execution-and-ci.sh unit' || return 1
-  wf_block '- name: test-ci$' | grep -qxF '        run: npm run test:ci' || return 1
+  wf_block '- name: test-ci$' | grep -qxF '        run: npm run test:ci && sh scripts/e2e.sh test:ci normal error-500-then-200 ratelimit-429 slow-5000' || return 1
   wf_block '- name: smoke$' | grep -qxF '        run: sh tests/m09-execution-and-ci.sh smoke' || return 1
   wf_block '- name: contract$' | grep -qxF '        run: sh tests/m09-execution-and-ci.sh contract' || return 1
   wf_block '- name: collect$' | grep -qxF '        run: sh scripts/e2e.sh collect' || return 1
   wf_block '- name: stop$' | grep -qxF '        run: npm run stop'
+}
+
+# T2622: M08 の4シナリオは test-ci の検査列に直列で入る。専用の step は増やさない（ステップの順序は変えない）。
+t_ci_test_ci_scenarios() {
+  _b=$(wf_block '- name: test-ci$') || return 1
+  # 既存の test:ci が先、4シナリオの test:ci が後。失敗したら後は動かない（&&）。
+  printf '%s\n' "$_b" | grep -qxF '        run: npm run test:ci && sh scripts/e2e.sh test:ci normal error-500-then-200 ratelimit-429 slow-5000' || return 1
+  # 専用の step を増やしていないこと。名前付きの step は計画どおり6件（checkout と upload は uses で数えない）。
+  [ "$(grep -cE '^      - name: ' "$WF")" -eq 6 ] || return 1
+  # job 名と required status check の名前（e2e、既存の step 名）は変わらない。
+  wf_has_line '  e2e:' && wf_has_line '      - name: smoke' && wf_has_line '      - name: contract'
 }
 
 t_wf_has_no_docker_compose_call() {
@@ -2855,7 +2866,8 @@ t_doc_keeps_lines_checked_by_m07_m08_s14() {
   grep -Fq '(docs/シナリオ隔離.md)' "$_readme" || return 1
   grep -Fq '(docs/E2Eテスト.md)' "$_readme" || return 1
   grep -Fq '(docs/ポート公開範囲.md)' "$_readme" || return 1
-  grep -Fxq -- '- 127.0.0.1:3128 でリッスン' "$_readme" || return 1
+  # S26: Squid はホストへ公開しない。README は pause の namespace の中で待ち受けると書く。
+  grep -Fxq -- '- pause コンテナと共有する namespace の中で 127.0.0.1:3128 をリッスン（ホストへは公開しない）' "$_readme" || return 1
   grep -Fxq -- '- REST API mock server（127.0.0.1:8080）' "$_readme"
 }
 
@@ -2902,7 +2914,7 @@ t_gate_m09_block_condition_covers_targets_and_squid_inputs() {
 
 t_gate_m09_block_placed_after_compose_block_and_before_summary() {
   _gf=$ROOT/scripts/quality-gate.sh
-  _m08=$(grep -n 'FAILED: M08 のコンテナ' "$_gf" | cut -d: -f1)
+  _m08=$(grep -n "managed_check '統合テストの後" "$_gf" | cut -d: -f1)
   _gif=$(grep -n "^if has_match '.*scripts/e2e" "$_gf" | cut -d: -f1)
   _sum=$(grep -n '^if \[ "\$status" -eq 0 \]' "$_gf" | cut -d: -f1)
   must [ -n "$_m08" ]
@@ -2914,14 +2926,46 @@ t_gate_m09_block_placed_after_compose_block_and_before_summary() {
 
 t_gate_m09_block_checks_leftover_containers_after_smoke() {
   _blk=$(gate_m09_block) || return 1
-  must gate_has "$_blk" 'docker ps -aq --filter label=swsc.managed=true'
-  must gate_has "$_blk" 'FAILED: M09 のコンテナ（swsc-）が残っている'
-  must gate_has "$_blk" 'status=1'
+  must gate_has "$_blk" "managed_check 'M09 のコンテナ（swsc-）が残っている、または確かめられない'"
   _s=$(printf '%s\n' "$_blk" | grep -n '^  run sh tests/m09-execution-and-ci.sh smoke$' | cut -d: -f1)
-  _d=$(printf '%s\n' "$_blk" | grep -n 'docker ps -aq --filter label=swsc.managed=true' | cut -d: -f1)
+  _d=$(printf '%s\n' "$_blk" | grep -n 'managed_check' | cut -d: -f1)
   must [ -n "$_s" ]
   must [ -n "$_d" ]
   must [ "$_s" -lt "$_d" ]
+}
+
+# T2621: Compose の項目を外し、管理対象の残存検査（swsc_check_managed_empty）へ置き換えた品質ゲートの検査。
+t_gate_no_compose_calls_or_or_true_wrapped_docker() {
+  _gf=$ROOT/scripts/quality-gate.sh
+  must [ "$(grep -Ec 'docker-compose|docker compose' "$_gf" || true)" -eq 0 ]
+  must [ "$(grep -Ec 'docker.*\|\| true' "$_gf" || true)" -eq 0 ]
+}
+
+t_gate_runs_s14_contract_unit_and_managed_check_for_squid_block() {
+  _gf=$ROOT/scripts/quality-gate.sh
+  must grep -Fxq '  run sh tests/s14-taskdef-contract.sh unit' "$_gf"
+  must grep -Fq 'swsc_check_managed_empty' "$_gf"
+  must [ "$(grep -c 's14-compose-port-binding' "$_gf" || true)" -eq 0 ]
+}
+
+# 品質ゲートの managed_check を、ゲートの定義から取り出して実行する。偽の docker の失敗が status=1 になることを確かめる。
+t_managed_resource_check_failure() {
+  managed_setup || return 1
+  touch "$TMP/docker-fail"
+  _fn=$(awk '/^managed_check\(\) \{/{f = 1} f {print} f && /^}/ {exit}' "$ROOT/scripts/quality-gate.sh")
+  must [ -n "$_fn" ]
+  _out=$(env -i PATH="$TMP/mbin:$TMP/mbase" HOME="$TMP" SWSC_ROOT="$ROOT" SWSC_TEST_DIR="$TMP" \
+    REPO_ROOT="$ROOT" sh -c 'repo_root=$REPO_ROOT; status=0; '"$_fn"'; managed_check 試験 2>/dev/null; echo "$status"') || return 1
+  must [ "$_out" = 1 ]
+}
+
+t_managed_resource_check_passes_when_empty_in_gate() {
+  managed_setup || return 1
+  _fn=$(awk '/^managed_check\(\) \{/{f = 1} f {print} f && /^}/ {exit}' "$ROOT/scripts/quality-gate.sh")
+  must [ -n "$_fn" ]
+  _out=$(env -i PATH="$TMP/mbin:$TMP/mbase" HOME="$TMP" SWSC_ROOT="$ROOT" SWSC_TEST_DIR="$TMP" \
+    REPO_ROOT="$ROOT" sh -c 'repo_root=$REPO_ROOT; status=0; '"$_fn"'; managed_check 試験 2>/dev/null; echo "$status"') || return 1
+  must [ "$_out" = 0 ]
 }
 
 t_gate_does_not_register_contract_and_states_why() {
@@ -2941,13 +2985,15 @@ t_gate_m09_is_not_added_to_the_existing_loop() {
   _gf=$ROOT/scripts/quality-gate.sh
   _n=$(grep '^  for test in' "$_gf" | grep -c m09 || true)
   must [ "$_n" -eq 0 ]
-  must grep -Fxq '  for test in tests/m03-wiremock-scenarios.sh tests/m04-test-client.sh tests/m05-proxy-integration.sh tests/m06-client-resilience.sh tests/m07-scenario-isolation.sh tests/m08-e2e-suite.sh tests/s14-compose-port-binding.sh; do' "$_gf"
+  must grep -Fxq '  for test in tests/m02-routing-smoke.sh tests/m03-wiremock-scenarios.sh tests/m04-test-client.sh tests/m05-proxy-integration.sh tests/m06-client-resilience.sh tests/m07-scenario-isolation.sh tests/m08-e2e-suite.sh; do' "$_gf"
 }
 
-t_gate_existing_compose_condition_and_note_are_unchanged() {
+# T2621: M02 は稼働中のスタックを前提にしなくなったため、ゲートの対象へ入れ、除外の NOTE を外す。
+t_gate_m02_runs_in_gate_without_stack_note() {
   _gf=$ROOT/scripts/quality-gate.sh
-  must grep -Fxq "if has_match '^(docker-compose\.yml|Dockerfile|squid-config/|wiremock-scenarios/|test-client/|tests/|scripts/scenario-lib\.sh)'; then" "$_gf"
-  must grep -Fxq "  printf '%s\n' 'NOTE: tests/m02-routing-smoke.sh は稼働中のスタックが必要なため、ゲートでは実行しない'" "$_gf"
+  must grep -Fxq "if has_match '^(Dockerfile|squid-config/|wiremock-scenarios/|test-client/|tests/|scripts/scenario-lib\.sh)'; then" "$_gf"
+  must [ "$(grep -c 'NOTE: tests/m02-routing-smoke.sh' "$_gf" || true)" -eq 0 ]
+  must grep -Fq 'tests/m02-routing-smoke.sh' "$_gf"
 }
 
 # T2601: ロックとポート確認の検査。ロックは実行専用の一時ディレクトリだけに置く。
@@ -3618,6 +3664,7 @@ run_unit() {
   check 'ステップの順序は checkout、unit、test-ci、smoke、contract、collect、upload、stop' t_wf_steps_run_in_plan_order
   check '各ステップは計画どおりの入口を1つだけ呼ぶ' t_wf_each_step_runs_its_command
   check 'docker compose と docker-compose を呼ばない' t_wf_has_no_docker_compose_call
+  check 'test-ci の検査列に M08 の4シナリオが直列で入り、専用の step は増えない' t_ci_test_ci_scenarios
   if python3 -c 'import yaml' >/dev/null 2>&1; then
     check 'workflow は YAML として読め、形が一致する' t_wf_yaml_parses_with_expected_shape
   else
@@ -3648,7 +3695,11 @@ run_unit() {
   check 'contract は登録せず、理由の NOTE 行がある' t_gate_does_not_register_contract_and_states_why
   check 'ブロックは AWS CLI と認証情報の変数を参照しない' t_gate_m09_block_has_no_aws_or_credentials
   check '既存の for ループに m09 を加えない' t_gate_m09_is_not_added_to_the_existing_loop
-  check '既存の Compose の条件と NOTE 行は変わらない' t_gate_existing_compose_condition_and_note_are_unchanged
+  check 'M02 はゲートの対象で、稼働中のスタックを前提とする NOTE が無い' t_gate_m02_runs_in_gate_without_stack_note
+  check 'ゲートは Compose の呼び出しと、|| true で包んだ Docker の呼び出しを持たない' t_gate_no_compose_calls_or_or_true_wrapped_docker
+  check 'ゲートは S14 の unit と管理対象の残存検査（swsc_check_managed_empty）を実行する' t_gate_runs_s14_contract_unit_and_managed_check_for_squid_block
+  check 'Docker の失敗は管理対象の残存検査で status=1 になる（ゲートの定義から取り出して確かめる）' t_managed_resource_check_failure
+  check '管理対象の残存が無ければ、ゲートの残存検査は status=0 のまま' t_managed_resource_check_passes_when_empty_in_gate
   printf '== T2601 ロックとポート確認\n'
   check 'ロックは2回目の取得を1で拒否し、確認手順を示し、自動で消さない' t_lock_acquire_busy
   check '解放は所有者の自分だけ0で消し、他者の所有や不在では何も消さず1を返す' t_lock_release_non_owner

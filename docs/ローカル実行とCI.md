@@ -23,6 +23,13 @@ npm run test:ci
 | `stop` | 起動したコンテナとネットワークを削除する |
 | `clean` | `stop` に加えて、生成物（`.e2e/`）と収集ログ（`e2e-logs/`）を削除する。目印（`.swsc-managed`）が無いディレクトリは、削除せずに失敗する |
 | `test:ci` | `start`、`test`、`collect`、`stop` を続けて実行する。CI と同じ順序である |
+| `test:ci <シナリオ名...>` | M08 の代表シナリオから選んだものを、直列に1回ずつ実行する。名前は `normal`、`error-500-then-200`、`ratelimit-429`、`slow-5000` のいずれか |
+
+M08 の4シナリオは、`npm run test:ci` には含まれない。CI と同じ検査は次の1行で実行する。
+
+```sh
+sh scripts/e2e.sh test:ci normal error-500-then-200 ratelimit-429 slow-5000
+```
 
 出力先は、環境変数 `SWSC_E2E_DIR`（既定は `.e2e/`）と `SWSC_LOG_DIR`（既定は `e2e-logs/`）で変えられる。
 どちらも `/` 以外の絶対パスで指定する。
@@ -99,6 +106,25 @@ Squid の元のエントリポイントは SIGTERM を `squid` へ転送しな�
 `stop` は、接頭辞 `swsc-` とラベル `swsc.managed=true` の両方が一致するものだけを削除する。
 他のプロジェクトのコンテナとネットワークは消さない。
 
+### 固定ポートのロック
+
+8080、3128、4566 は、ホスト全体で1つしか使えない。
+そのため、入口の `start`、`test`、`test:ci`、`smoke` は、同じ場所のロックを取ってから動く。
+
+- 既定の場所は `/tmp/swsc-e2e-ports.lock` である。`SWSC_LOCK_DIR` で変えられる。
+  `$TMPDIR` は使わない。端末やプロセスごとに変わるため、別の実行と排他できないからである。
+- ロックは `mkdir` の原子性で取る。ロックの中に、所有者の PID と開始時刻を書く。
+- ロックを取った後に、8080 と 3128 と 4566 の空きを確かめる。
+- `test:ci` は、トップで1回だけロックを取る。配下の検査へ `SWSC_LOCK_HELD=1` を渡し、二重に取らない。
+- 後始末（収集、停止、ロック解放）は、`INT` と `TERM` を受けたときも行う。
+
+ロックが残ったときは、自動では消えない。次の順で確かめてから消す。
+
+1. `ls -ld "$SWSC_LOCK_DIR"`（未設定なら `/tmp/swsc-e2e-ports.lock`）で、ロックの PID と開始時刻を見る。
+2. その PID のプロセスが無いことを確かめる。
+3. `docker ps -a --filter label=swsc.managed=true` で、管理対象のコンテナが無いことを確かめる。
+4. 3つとも問題がなければ、`rmdir` でロックのディレクトリを消す。
+
 ### 検査の数え方
 
 `test` は、WireMock の受信数を `/__admin/requests` の記録から数える。数えるのは、URL が `/api/` で始まるものだけである。
@@ -106,12 +132,11 @@ Squid が内部で出す要求（`/squid-internal-periodic/` など）は数え�
 
 ## 旧基盤との関係
 
-旧基盤は、`docker-compose.yml` と、README の旧 Compose 手順である。
-移行が完了するまで残す。移行が完了した後に削除する（別の Issue で行う）。
+旧基盤は `docker-compose.yml` である。現行の手順ではない。
+ファイルの削除は、Compose 削除の作業（T2630）と同時に行う。
 
 - 新基盤と旧基盤を同時に起動しない。どちらも 8080 のポートを使い、起動が止まる。
-- 新基盤の `smoke` に、M08 の4シナリオ（`normal` など）は含まれない。
-- M08 の検査は、既存の Compose 手順で実行する。
+- M08 の4シナリオは、新基盤の `sh tests/m08-e2e-suite.sh smoke` と `sh scripts/e2e.sh test:ci <シナリオ名...>` で実行する。
 
 ## CIの見方
 
@@ -126,7 +151,7 @@ Squid が内部で出す要求（`/squid-internal-periodic/` など）は数え�
 | 順序 | ステップ | 内容 | 上限 |
 | --- | --- | --- | --- |
 | 1 | `unit` | `sh tests/m09-execution-and-ci.sh unit` | 3分 |
-| 2 | `test-ci` | `npm run test:ci` | 10分 |
+| 2 | `test-ci` | `npm run test:ci` の後に、M08 の4シナリオを `sh scripts/e2e.sh test:ci normal error-500-then-200 ratelimit-429 slow-5000` で実行する | 10分 |
 | 3 | `smoke` | `sh tests/m09-execution-and-ci.sh smoke` | 8分（仮値） |
 | 4 | `contract` | `sh tests/m09-execution-and-ci.sh contract` | 5分（仮値） |
 | 5 | `collect` | `sh scripts/e2e.sh collect`。失敗しても必ず実行する | - |
@@ -142,9 +167,18 @@ Squid が内部で出す要求（`/squid-internal-periodic/` など）は数え�
 
 ## 所要時間の目安
 
-実測の値は、CI の初回実行で実測する。
+CI の値は、CI の初回実行で実測する。ここには、まだ書かない。
 上の表の上限は、実測の前に置いた仮の値である。実測の結果で見直す。
 ジョブの上限は15分である。`test:ci` の上限は10分である。
+
+ローカルの実測は参考であり、CI の値ではない（ローカル実測、Linux aarch64 の EC2）。
+
+| 検査 | 実測（参考） |
+| --- | --- |
+| 品質ゲート（`sh scripts/quality-gate.sh`） | 約445秒 |
+| M07 の smoke | 約150秒 |
+| M08 の smoke | 約70秒 |
+| `test:ci` の4シナリオ | 約26秒 |
 
 ## 再現性
 
@@ -152,8 +186,8 @@ Squid が内部で出す要求（`/squid-internal-periodic/` など）は数え�
 | --- | --- |
 | イメージの版 | MiniStack は `1.5.37`、WireMock は `3.13.1`、alpine は `3.20` に固定する |
 | Squid のイメージ | `ubuntu/squid:latest` を基底にする。`latest` のため、取得の時期で中身が変わりうる。実行ごとに、基底のダイジェストを収集物の `env.txt` に記録する。ゲート時点のダイジェストは `gate-results.md` にもある |
-| ポートの空き | 8080、3128、4566 を使う。他のプロセスが使っていると起動が止まる |
-| 並列実行 | 名前とポートが固定のため、同じホストで2つ同時に実行しない |
+| ポートの空き | 8080 と 4566 はホストで使う。3128 は pause の中だけで使う。他のプロセスが使っていると起動が止まる |
+| 並列実行 | 名前とポートが固定のため、同じホストで2つ同時に実行しない。入口のロックで排他する（前節） |
 | 実行環境 | Colima（ローカル）と Linux（CI）で結果が変わりうる。G1 と G3 の一部は CI で再確認する |
 
 ## 本番向けの検査

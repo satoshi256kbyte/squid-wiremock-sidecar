@@ -490,13 +490,19 @@ swsc_test_ci_scenarios() { # シナリオ名...
   # 親だけが TERM で止められたときにロックが残り、子が孤児になるため（evidence-code-review の MUST）。
   # 信号を受けたら子へ TERM を送り、子の後始末（collect、stop）を待ってからロックを解放する。
   _swsc_ci_child=
+  _swsc_ci_forked=0
   trap '_swsc_ci_stop_child; exit 130' INT
   trap '_swsc_ci_stop_child; exit 143' TERM
   trap '_t=$?; _swsc_ci_stop_child; swsc_lock_leave || [ "$_t" -ne 0 ] || _t=1; exit "$_t"' EXIT
+  # Why: & の直後から _swsc_ci_child へ代入するまでの間に信号が届いても、子を止められるようにする。
+  # シェルは子を作った時点で $! を設定するため、trap は _swsc_ci_forked=1 なら $! を使う（unit で実際に起きた）。
+  _swsc_ci_forked=1
   swsc_test_ci_scenarios_child "$@" &
   _swsc_ci_child=$!
   _rc=0
   wait "$_swsc_ci_child" || _rc=$?
+  # Why: 子が終わった後は、$! を使わない。回収済みの PID を別のプロセスが再利用していると、誤って止めるため。
+  _swsc_ci_forked=0
   _swsc_ci_child=
   exit "$_rc"
 }
@@ -509,11 +515,15 @@ swsc_test_ci_scenarios_child() { # シナリオ名...
 
 # 子が動いていれば TERM を送り、終わるまで待つ。動いていなければ何もしない。冪等。
 _swsc_ci_stop_child() {
+  if [ -z "${_swsc_ci_child:-}" ] && [ "${_swsc_ci_forked:-0}" = 1 ] && [ -n "${!:-}" ]; then
+    _swsc_ci_child=$!
+  fi
   if [ -n "${_swsc_ci_child:-}" ]; then
     kill -TERM "$_swsc_ci_child" 2>/dev/null || true
     wait "$_swsc_ci_child" 2>/dev/null || true
     _swsc_ci_child=
   fi
+  _swsc_ci_forked=0
 }
 
 # 停止。接頭辞とラベルの両方が一致するものだけを、依存の順に消す。冪等（対象が無ければ0）。
