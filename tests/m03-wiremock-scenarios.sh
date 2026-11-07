@@ -1,17 +1,41 @@
 #!/bin/sh
+# M03 WireMock シナリオの検査。新基盤で WireMock を起動し、mapping の静的検査、
+# 管理APIの応答、本文、ステータス、遅延を確かめる。
 set -eu
 
+ROOT=$(cd "$(dirname "$0")/.." && pwd)
+SWSC_ROOT=$ROOT
+# shellcheck source=/dev/null
+. "$ROOT/scripts/e2e-lib.sh"
+# shellcheck source=/dev/null
+. "$ROOT/scripts/e2e-runner.sh"
+# shellcheck source=/dev/null
+. "$ROOT/scripts/scenario-lib.sh"
+cd "$ROOT"
+
 wiremock_url="${WIREMOCK_URL:-http://127.0.0.1:8080}"
-tmp_dir=$(mktemp -d)
+
+# Why: 固定ポートのロックは入口と同じ規約で1回だけ取る。取れなければ、他の実行の swsc- に触れずに止まる。
+swsc_lock_enter || exit 1
+# Why: 一時ディレクトリはロックの後に作る。ロックが取れずに止まったとき、残さないため。
+tmp_dir=$(mktemp -d) || { swsc_lock_leave; exit 1; }
 cleanup() {
-  docker-compose down --remove-orphans >/dev/null 2>&1 || true
-  rm -f "$tmp_dir"/*
-  rmdir "$tmp_dir"
+  rc=$?
+  # Why: 失敗時だけ収集する。成功時は環境を残さず、終了コードは本体の結果のまま返す。
+  if [ "$rc" -ne 0 ]; then swsc_collect || true; fi
+  swsc_stop || true
+  # Why: 一時ディレクトリの削除に失敗しても、ロックの解放まで進める。
+  rm -f "$tmp_dir"/* || true
+  rmdir "$tmp_dir" || true
+  swsc_lock_leave || { [ "$rc" -ne 0 ] || rc=1; }
+  exit "$rc"
 }
 trap cleanup EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
 
-docker-compose down --remove-orphans >/dev/null 2>&1 || true
-docker-compose up -d --build
+swsc_start_main
+
 attempt=0
 until curl --fail --silent --show-error "$wiremock_url/__admin/mappings" >/dev/null 2>&1; do
   attempt=$((attempt + 1))
@@ -54,6 +78,9 @@ done
 for file in wiremock-scenarios/mappings/*.json; do
   validate_mapping "$file"
 done
+
+# Why: 既存の scenario-lib の静的検査（状態グループと宛先）を、項目の検査に加えて使う。既存の検査は残す。
+scenario_check_static wiremock-scenarios/mappings
 
 printf '%s' '{' > "$tmp_dir/invalid.json"
 if validate_json "$tmp_dir/invalid.json" >/dev/null 2>&1; then
