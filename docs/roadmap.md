@@ -43,7 +43,7 @@ Issue本文には、目的、Spec Kitの保存先、対象範囲、完了条件�
 
 対象はM01からM05とする。
 
-- 3サービスをComposeで起動できる
+- 3サービスを起動できる（当時はComposeで確かめた。S26でECSタスク定義方式へ移行し、Composeは削除した）
 - Test ClientからSquidを経由してWireMockへ通信できる
 - 許可対象外の外部通信を成功させない
 - SquidとWireMockのログで通信経路を確認できる
@@ -84,7 +84,7 @@ M01完了後のM02とM03は設計上独立しているが、ロードマップ�
 
 M11で次を確認できれば、初期スコープの完成とする。
 
-- `docker-compose up`からE2Eテスト、`docker-compose down`までが再現できる
+- `npm run start`からE2Eテスト、`npm run stop`までが再現できる
 - Test Client、Squid、WireMockの3層経路が検証できる
 - 外部APIへの実通信なしで4つの代表シナリオが通る
 - ローカルとGitHub Actionsの両方で同じ受入条件を満たす

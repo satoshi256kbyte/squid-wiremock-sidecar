@@ -31,7 +31,7 @@ Critical、High、またはMediumの指摘が残っている場合は、修正�
 | --- | --- |
 | ドキュメント、Spec Kit、AGENTS.mdのみ | `npm run lint:md`（markdownlint-cli2、固定版）、`git diff --check` |
 | シェル、テスト、Test Client | 上記、`sh -n`、変更対象に対応するテスト |
-| Compose、Dockerfile、Squid、WireMock | 上記、`docker-compose config --quiet`、関連smoke test |
+| Dockerfile、Squid、WireMock、Test Client | 上記、関連smoke test（M02〜M08の該当スクリプト）、管理対象の残存検査 |
 | 複数コンポーネントまたは影響範囲が不明 | 全ての該当ゲートと関連smoke test |
 | 型付きアプリケーション | 型検査設定を追加した場合のみ、設定済みの型検査を実行する |
 | AWS CDK、Ministack | 構成を追加した場合のみ、対応するsynth・構成検査を実行する |

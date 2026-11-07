@@ -34,10 +34,11 @@ jobs:
         run: sh tests/m09-execution-and-ci.sh unit
         timeout-minutes: 3
       # 起動を含むため10分まで（Q-906）。
+      # M08 の4シナリオは、専用の step を作らず、同じ test-ci の検査列へ直列で足す（ローカルの test:ci と同じ順序）。
       - name: test-ci
-        run: npm run test:ci
+        run: npm run test:ci && sh scripts/e2e.sh test:ci normal error-500-then-200 ratelimit-429 slow-5000
         timeout-minutes: 10
-      # smoke と contract の値は仮置き。初回の実測で見直す（FR-917）。
+      # 上限は初回CIの実測（smoke 85秒、contract 37秒）に対して5倍以上の余裕がある。根拠は docs/ローカル実行とCI.md（FR-917）。
       - name: smoke
         run: sh tests/m09-execution-and-ci.sh smoke
         timeout-minutes: 8

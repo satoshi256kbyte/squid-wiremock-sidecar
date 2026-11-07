@@ -1,12 +1,19 @@
 #!/bin/sh
-# M06 の検査入口。unit は retry-lib.sh の関数を直接呼ぶだけで、Compose も Docker も使わない。
-# smoke は unit に続けて、squid、WireMock、test-client を実際に起動して通しで確かめる。
-# 外部の API には出ない。通信はすべて Compose の閉じたネットワーク内で行う。
+# M06 の検査入口。unit は retry-lib.sh の関数を直接呼ぶだけで、docker も使わない。
+# smoke は unit に続けて、新基盤（taskdef）で squid、WireMock、Client を起動して通しで確かめる。
+# 外部の API には出ない。通信は新基盤の閉じたネットワーク内で行う。
 set -eu
 
 ROOT=$(cd "$(dirname "$0")/.." && pwd)
 LIB="$ROOT/test-client/retry-lib.sh"
 MODE=${1:-smoke}
+# 新基盤の共通部品（ロック、起動、Client 実行、停止）。読み込みに副作用はない。
+# Why: smoke が swsc_lock_enter、swsc_start_main などを使うため。
+SWSC_ROOT=$ROOT
+# shellcheck source=/dev/null
+. "$ROOT/scripts/e2e-lib.sh"
+# shellcheck source=/dev/null
+. "$ROOT/scripts/e2e-runner.sh"
 
 failures=0
 total=0
@@ -401,6 +408,13 @@ CLIENT_BODY=BODYTEXT" 0 ep_obs stdout "429/0/120 200/0/-"
     ep_text_check ':8080' test-client/retry-lib.sh test-client/entrypoint.sh
 }
 
+# 先に赤にする検査の名前（m06_retry_after、m06_timeout_exit_28）を、実際の検査へ付ける。
+unit_named_m06() {
+  expect "m06_retry_after: Retry-After 120 は 429 の待機を上限30へ切り詰める" "30 1" 0 resolve_429_wait 120 2 30
+  expect "m06_retry_after: CR付きRetry-After 5 を解析する" 5 0 ra_headers 'Retry-After: 5\r\n'
+  expect "m06_timeout_exit_28: タイムアウトの終了コードは28" 28 0 ep_obs rc "000/28/-"
+}
+
 run_unit() {
   if [ -f "$LIB" ]; then
     . "$LIB"
@@ -418,6 +432,7 @@ run_unit() {
   unit_entrypoint_retry
   unit_entrypoint_timeout
   unit_entrypoint_diag
+  unit_named_m06
 
   if [ "$failures" -ne 0 ]; then
     printf 'M06 unit: %s件失敗 / %s件中\n' "$failures" "$total" >&2
@@ -426,12 +441,15 @@ run_unit() {
   printf 'M06 unit: %s件すべて通過\n' "$total"
 }
 
-# ---- smoke（Compose を使う。T611） ----
-# unit と違い、ここでは実際の squid、WireMock、test-client を起動する。
-# WireMock の件数は前後の差で見る。readiness 確認の通信や他の検査の通信を数えないため。
+# ---- smoke（新基盤で通しに確かめる。T611） ----
+# unit と違い、ここでは taskdef から squid、WireMock、Client を起動して通しで確かめる。
+# 起動、収集、停止は共通の入口（swsc_start_main、swsc_collect、swsc_stop）に任せる。
+# WireMock の件数は前後の差で見る。swsc_wiremock_count_path で完全一致の経路だけを数えるため。
+# Why not docker stop、restart、kill: M06 の実装は Client 実行、ログ収集、停止だけに当たる（plan.md 3.2）。
 wiremock_url="${WIREMOCK_URL:-http://127.0.0.1:8080}"
-proxy_url="${PROXY_URL:-http://127.0.0.1:3128}"
+api_base_url="http://api.example.com"
 smoke_dir=
+client_rc=0
 
 # 判定が外れたら検査名を出して止める。どの検査が落ちたかを一目で分かるようにする。
 smoke_must() { # 検査名 判定コマンド...
@@ -444,49 +462,39 @@ smoke_must() { # 検査名 判定コマンド...
   exit 1
 }
 
-# WireMock の管理 API で、パス一致の呼び出し件数だけを読む。ジャーナルのリセットはしない。
-# 件数が取れなければ非ゼロで返し、呼び出し側の set -e で止める。
-wiremock_count() { # URLパス
-  _body=$(printf '{"method":"GET","url":"%s"}' "$1")
-  _res=$(curl --fail --silent --show-error -H 'Content-Type: application/json' \
-    -d "$_body" "$wiremock_url/__admin/requests/count")
-  _n=$(printf '%s' "$_res" | sed -n 's/.*"count" *: *\([0-9][0-9]*\).*/\1/p')
-  [ -n "$_n" ] || return 1
-  printf '%s' "$_n"
+# WireMock の受信数を、経路の完全一致で数える。取得に失敗したら非ゼロで返し、set -e で止める。
+wiremock_count() { # 経路
+  swsc_wiremock_count_path "$1"
 }
 
-# test-client を1回だけ実行する。標準出力と標準エラーは別々に残し、終了コードは client_rc へ入れる。
-# docker-compose run の終了コードは test-client の終了コードを返すので、タイムアウトの 28 もそのまま取れる。
-smoke_client() { # docker-compose run に渡す -e 指定
+# Client を1回だけ実行する。標準出力と標準エラーは別々に残し、終了コードは client_rc へ入れる。
+# 環境変数は NAME=VALUE の引数で渡す。Why: 値をシェルの文字列へ連結しないため。
+smoke_client() { # NAME=VALUE...
   client_rc=0
-  docker-compose run --rm --no-deps "$@" test-client \
-    >"$smoke_dir/out" 2>"$smoke_dir/err" || client_rc=$?
+  swsc_client_once_env "$SWSC_E2E_DIR/run" "$$" "$api_base_url" \
+    "$smoke_dir/out" "$smoke_dir/err" "$@" || client_rc=$?
 }
 
-# test-client のイメージは起動の前に1回だけビルドし、各 run ではビルドしない。
-# 毎回ビルドすると検査が遅くなり、ビルド結果の差で検査が揺れるのを避けるため。
 run_smoke() {
-  smoke_dir=$(mktemp -d)
+  # Why: ロックは取ってから一時ディレクトリを作る。取れずに止まったとき、残さないため。
+  swsc_lock_enter || exit 1
+  smoke_dir=$(mktemp -d) || { swsc_lock_leave; exit 1; }
   cleanup() {
     rc=$?
-    if [ "$rc" -ne 0 ]; then
-      docker-compose logs --no-color squid wiremock >&2 || true
-      docker-compose exec -T squid sh -c 'cat /var/log/squid/access.log' >&2 || true
-    fi
-    docker-compose down --remove-orphans >/dev/null 2>&1 || true
-    rm -f "$smoke_dir"/*
-    rmdir "$smoke_dir"
+    # Why: 失敗時だけ収集する。成功時は環境を残さず、終了コードは本体の結果のまま返す。
+    if [ "$rc" -ne 0 ]; then swsc_collect || true; fi
+    swsc_stop || true
+    # Why: 一時ディレクトリの削除に失敗しても、ロックの解放まで進める。
+    rm -f "$smoke_dir"/* || true
+    rmdir "$smoke_dir" || true
+    swsc_lock_leave || { [ "$rc" -ne 0 ] || rc=1; }
     exit "$rc"
   }
   trap cleanup EXIT
-  # 中断でもEXITの後始末（コンテナと一時ディレクトリ）を通す。終了コードは cleanup が保つ。
   trap 'exit 130' INT
   trap 'exit 143' TERM
 
-  # 前回の残りが別の結果を混ぜないように、開始前にも落としておく。
-  docker-compose down --remove-orphans >/dev/null 2>&1 || true
-  docker-compose up -d --build squid wiremock
-  docker-compose build test-client
+  swsc_start_main
 
   attempt=0
   until curl --fail --silent --show-error "$wiremock_url/__admin/mappings" >/dev/null 2>&1; do
@@ -495,24 +503,14 @@ run_smoke() {
     sleep 1
   done
 
-  # squid 経由で WireMock に届くまで待つ。M05 と同じ確認で、直接の疎通は見ない。
-  # squid 経由で WireMock に届くまで待つ。502 を成功扱いにしないため --fail を付け、
-  # 期待する本文が返るまで待つ。--fail がないと、WireMock 起動前の 502 で待ちが早く終わる。
-  attempt=0
-  until proxy_body=$(curl --fail --noproxy '' --proxy "$proxy_url" --silent --show-error \
-    'http://api.example.com/api/users/123') && printf '%s' "$proxy_body" | grep -Fq '"id": 123'; do
-    attempt=$((attempt + 1))
-    [ "$attempt" -lt 30 ] || exit 1
-    sleep 1
-  done
-
-  # retry-lib.sh が test-client イメージに入っていることを確かめる。COPY 漏れはここで見つかる。
-  docker-compose run --rm --no-deps --entrypoint test test-client -f /usr/local/bin/retry-lib.sh
+  # Why: Squid の待ち受けは swsc_start_main（runner）が確かめる。ホストからの proxy 確認は行わない。
+  # retry-lib.sh が Client のイメージに入っていることを確かめる。COPY 漏れはここで見つかる。
+  docker run --rm --entrypoint test "$SWSC_LOCAL_CLIENT_IMAGE" -f /usr/local/bin/retry-lib.sh
   printf '%s\n' 'retry-lib.sh: イメージ内に存在'
 
   # 成功応答では再試行も待機もしない。WireMock の件数が1増えるだけであることを見る。
   before=$(wiremock_count /api/users/123)
-  smoke_client -e TEST_API_PATH=/api/users/123
+  smoke_client TEST_API_PATH=/api/users/123
   after=$(wiremock_count /api/users/123)
   smoke_must "200: 終了コードは0" [ "$client_rc" -eq 0 ]
   smoke_must "200: CLIENT_STATUS=200" grep -qx 'CLIENT_STATUS=200' "$smoke_dir/out"
@@ -523,8 +521,7 @@ run_smoke() {
   # 500 は設定回数（1回）だけ再試行し、上限で最後のステータスを返す。終了コードは0のまま。
   # 基準秒0にして待機を省く。待機の計算そのものは unit で検査済み。
   before=$(wiremock_count /api/error-500)
-  smoke_client -e RETRY_MAX_ATTEMPTS_5XX=1 -e RETRY_BACKOFF_BASE_SECONDS=0 \
-    -e TEST_API_PATH=/api/error-500
+  smoke_client RETRY_MAX_ATTEMPTS_5XX=1 RETRY_BACKOFF_BASE_SECONDS=0 TEST_API_PATH=/api/error-500
   after=$(wiremock_count /api/error-500)
   smoke_must "500: 終了コードは0" [ "$client_rc" -eq 0 ]
   smoke_must "500: CLIENT_STATUS=500" grep -qx 'CLIENT_STATUS=500' "$smoke_dir/out"
@@ -534,8 +531,7 @@ run_smoke() {
 
   # 503 も 500 と同じ扱い。5xx のカウンターを使うので、回数の数え方も同じになる。
   before=$(wiremock_count /api/error-503)
-  smoke_client -e RETRY_MAX_ATTEMPTS_5XX=1 -e RETRY_BACKOFF_BASE_SECONDS=0 \
-    -e TEST_API_PATH=/api/error-503
+  smoke_client RETRY_MAX_ATTEMPTS_5XX=1 RETRY_BACKOFF_BASE_SECONDS=0 TEST_API_PATH=/api/error-503
   after=$(wiremock_count /api/error-503)
   smoke_must "503: 終了コードは0" [ "$client_rc" -eq 0 ]
   smoke_must "503: CLIENT_STATUS=503" grep -qx 'CLIENT_STATUS=503' "$smoke_dir/out"
@@ -546,7 +542,7 @@ run_smoke() {
   # 429 は Retry-After: 2 を返すマッピングを使う。待機は2秒で、診断ログの wait に出る。
   # 429 専用の回数 1 なので、初回と再試行の2試行になる。
   before=$(wiremock_count /api/ratelimit)
-  smoke_client -e RETRY_MAX_ATTEMPTS_429=1 -e TEST_API_PATH=/api/ratelimit
+  smoke_client RETRY_MAX_ATTEMPTS_429=1 TEST_API_PATH=/api/ratelimit
   after=$(wiremock_count /api/ratelimit)
   smoke_must "429: 終了コードは0" [ "$client_rc" -eq 0 ]
   smoke_must "429: CLIENT_STATUS=429" grep -qx 'CLIENT_STATUS=429' "$smoke_dir/out"
@@ -558,7 +554,7 @@ run_smoke() {
 
   # 遅延5秒の応答に対して、応答タイムアウト1秒で打ち切る。
   # 標準出力は空、終了コードは28、標準エラーは timeout の識別子になる（FR-606）。
-  smoke_client -e RESPONSE_TIMEOUT_SECONDS=1 -e TEST_API_PATH=/api/slow-5000
+  smoke_client RESPONSE_TIMEOUT_SECONDS=1 TEST_API_PATH=/api/slow-5000
   smoke_must "timeout: 終了コードは28" [ "$client_rc" -eq 28 ]
   smoke_must "timeout: 標準出力は空" [ ! -s "$smoke_dir/out" ]
   smoke_must "timeout: CLIENT_ERROR=timeout" grep -qx 'CLIENT_ERROR=timeout' "$smoke_dir/err"
@@ -568,19 +564,15 @@ run_smoke() {
   ra_script='. /usr/local/bin/retry-lib.sh
 printf "Retry-After: 7\r\n" | parse_retry_after
 printf "Retry-After: 1234567\r\n" | parse_retry_after'
-  ra_out=$(docker-compose run --rm --no-deps --entrypoint sh test-client -c "$ra_script")
+  ra_out=$(docker run --rm --entrypoint sh "$SWSC_LOCAL_CLIENT_IMAGE" -c "$ra_script")
   smoke_must "Retry-After: CR付き7と7桁の上限飽和がコンテナ内で一致" \
     [ "$ra_out" = "$(printf '7\n1000000')" ]
 
-  # 最後に止めて、このプロジェクトのコンテナが1つも残らないことを確かめる。
-  docker-compose down --remove-orphans >/dev/null 2>&1 || true
-  residue=$(docker-compose ps -a -q)
-  if [ -n "$residue" ]; then
-    printf 'FAIL: 終了後にコンテナが残っている\n%s\n' "$residue" >&2
-    exit 1
-  fi
+  # 停止のあと、管理対象（接頭辞とラベルの両方に一致）が1つも残らないことを確かめる。
+  swsc_stop || exit 1
+  swsc_check_managed_empty || exit 1
 
-  printf '%s\n' 'M06 smoke: Composeを使う通し検査すべて通過'
+  printf '%s\n' 'M06 smoke: 新基盤の通し検査すべて通過'
 }
 
 case "$MODE" in
@@ -588,7 +580,7 @@ case "$MODE" in
     run_unit
     ;;
   smoke)
-    # unit が落ちたら Compose を起動しない。どの層が壊れたかを分けるため。
+    # unit が落ちたら起動しない。どの層が壊れたかを分けるため。
     run_unit
     run_smoke
     ;;

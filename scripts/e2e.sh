@@ -15,7 +15,7 @@ SWSC_ROOT=$ROOT
 usage() {
   cat >&2 <<'EOF'
 使い方: sh scripts/e2e.sh <操作> [引数]
-操作: start | test | logs | stop | clean | test:ci | collect | check-production <ファイル> | contract
+操作: start | test | logs | stop | clean | test:ci [シナリオ名...] | collect | check-production <ファイル> | contract
 EOF
 }
 
@@ -40,8 +40,13 @@ case $op in
     exit "$rc"
     ;;
   test:ci)
-    # Why: 終了コードは swsc_test_ci_main が決めて exit する。ここでは上書きしない。
     swsc_check_smoke_prereq || exit 1
+    if [ $# -gt 0 ]; then
+      # Why: 名前を指定したときは、選んだ M08 のシナリオだけを実行する。終了コードは swsc_test_ci_scenarios が決める。
+      swsc_test_ci_scenarios "$@" || rc=$?
+      exit "$rc"
+    fi
+    # Why: 終了コードは swsc_test_ci_main が決めて exit する。ここでは上書きしない。
     swsc_test_ci_main
     ;;
   logs)

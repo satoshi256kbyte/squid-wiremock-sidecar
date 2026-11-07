@@ -56,22 +56,22 @@ HTTP クライアントの堅牢性を担保するためには、
 | 要件 | 説明 |
 |------|------|
 | ポータビリティ（移植性） | 開発者のローカル PC、および CI/CD パイプライン上で、コマンド一つでコンテナの構築からテスト実行、環境破棄までが完結すること |
-| IaC（Infrastructure as Code） | コンテナおよびネットワークの構成要素がすべてコード管理され、本番の ECS タスク定義と互換性のある形（Docker Compose 等）で記述されていること |
+| IaC（Infrastructure as Code） | コンテナおよびネットワークの構成要素がすべてコード管理され、本番の ECS タスク定義と互換性のある形（ECS タスク定義のテンプレート等）で記述されていること |
 | メンテナンス性 | Proxy のルーティングルールや Mock のレスポンス定義が、外部ファイルとしてマウントされ容易に更新・追加できる設計であること |
 
 ## 6. 前提技術スタック
 
-- **Local Emulation**: Docker Compose（Ministack/LocalStack 等）
+- **Local Emulation**: ECS タスク定義方式（`docker run` と pause 共有 namespace。Ministack/LocalStack 等）
 - **Container Orchestration（本番）**: AWS ECS（Fargate または EC2）、awsvpc ネットワークモード
 - **Proxy**: Squid（OSS フォワードプロキシ）
 - **Mock Server**: WireMock
-- **IaC & Automation**: Docker Compose、Shell Scripts、AWS CLI
+- **IaC & Automation**: ECS タスク定義（テンプレートから生成）、Shell Scripts、AWS CLI
 
 ## 7. 成果物リスト
 
 | 成果物 | 位置 | 説明 |
 |--------|------|------|
-| docker-compose.yml | `./` | 3 コンポーネント（Test Client、Squid Proxy、WireMock）の定義 |
+| ecs/task-definition.template.json | `./ecs/` | 2 コンテナ（Test Client、Squid Proxy）の定義。WireMock は別の手段で起動する |
 | squid.conf | `./squid-config/` | Proxy の設定ファイル（ルーティングルール、キャッシュ設定） |
 | wiremock-scenarios/ | `./wiremock-scenarios/` | WireMock 用のモック定義（JSON スタブ） |
 | test-client/ | `./test-client/` | テスト対象クライアントアプリケーション |
@@ -83,4 +83,4 @@ HTTP クライアントの堅牢性を担保するためには、
 - Squid のルーティングは localhost:3128 を通すため、
   クライアント側のプロキシ設定（HTTP_PROXY 環境変数等）が必須
 - WireMock は REST API でスタブ定義の動的変更をサポート
-- Docker/Docker Compose の実行環境が必須（ローカル・CI 共通）
+- Docker の実行環境が必須（ローカル・CI 共通）。Docker Compose は使わない

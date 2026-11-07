@@ -43,6 +43,16 @@ run() {
   fi
 }
 
+# 管理対象（接頭辞 swsc- とラベル swsc.managed=true の両方に一致）の残存を確かめる。
+# Why: swsc_check_managed_empty は Docker の失敗を残存なしと区別して1を返すため、|| true で隠さない。
+# Why: e2e-lib.sh は部分シェルで読み込み、その変数を品質ゲートの本体へ漏らさない。
+managed_check() { # 失敗時の説明
+  if ! (. "$repo_root/scripts/e2e-lib.sh" && swsc_check_managed_empty); then
+    printf 'FAILED: %s\n' "$1" >&2
+    status=1
+  fi
+}
+
 # 共通ゲート: 差分、コミット済み範囲、シェル構文
 run git diff --check
 run git diff --cached --check
@@ -64,28 +74,26 @@ if has_match '(\.md$|^package(-lock)?\.json$|^\.markdownlint\.json$)'; then
   fi
 fi
 
-# Compose、Dockerfile、Squid、WireMock、Test Client、統合テストの変更
-if has_match '^(docker-compose\.yml|Dockerfile|squid-config/|wiremock-scenarios/|test-client/|tests/|scripts/scenario-lib\.sh)'; then
-  run docker-compose config --quiet
-  # 自らComposeのライフサイクルを管理するスモークだけを、変更範囲に応じて実行する。
-  # M02は稼働中のスタックを前提とし、ゲートから起動するとWireMockへ接続できず失敗するため、
-  # AGENTS.mdの方針どおり個別に実行する。
-  printf '%s\n' 'NOTE: tests/m02-routing-smoke.sh は稼働中のスタックが必要なため、ゲートでは実行しない'
-  for test in tests/m03-wiremock-scenarios.sh tests/m04-test-client.sh tests/m05-proxy-integration.sh tests/m06-client-resilience.sh tests/m07-scenario-isolation.sh tests/m08-e2e-suite.sh tests/s14-compose-port-binding.sh; do
+# Squid、WireMock、Test Client、統合テストの変更
+if has_match '^(Dockerfile|squid-config/|wiremock-scenarios/|test-client/|tests/|scripts/scenario-lib\.sh)'; then
+  # M02〜M08 は自分で起動と停止を行い、ロック、trap、cleanup を持つ。稼働中のスタックは前提にしない。
+  for test in tests/m02-routing-smoke.sh tests/m03-wiremock-scenarios.sh tests/m04-test-client.sh tests/m05-proxy-integration.sh tests/m06-client-resilience.sh tests/m07-scenario-isolation.sh tests/m08-e2e-suite.sh; do
     [ -f "$test" ] || continue
-    if has_match "^$test\$|^(docker-compose\.yml|Dockerfile|squid-config/|wiremock-scenarios/|test-client/|scripts/scenario-lib\.sh)"; then
+    if has_match "^$test\$|^(Dockerfile|squid-config/|wiremock-scenarios/|test-client/|scripts/scenario-lib\.sh)"; then
       run sh "$test"
     fi
   done
-  if [ -n "$(docker-compose ps -aq 2>/dev/null || true)" ]; then
-    printf 'FAILED: 統合テスト後にコンテナが残っている\n' >&2
-    status=1
-  fi
-  # M08 は m08-e2e プロジェクトで動くため、既定のプロジェクトだけでは残りを見逃す。
-  if [ -n "$(COMPOSE_PROJECT_NAME=m08-e2e docker-compose ps -aq 2>/dev/null || true)" ]; then
-    printf 'FAILED: M08 のコンテナ（m08-e2e）が残っている\n' >&2
-    status=1
-  fi
+  # 統合テストの後に、管理対象の資源が残っていないことを確かめる。Docker の失敗も残存として扱う。
+  managed_check '統合テストの後に管理対象の資源（swsc-）が残っている、または確かめられない'
+fi
+
+# S14 の契約検査。Docker を使わない unit で、Compose の展開は見ない。
+# Why: 契約の入力（e2e-runner.sh のポート公開とマウント、e2e-taskdef.py、ecs/ のタスク定義と派生設定）だけの変更でも、
+# Squid の非公開と mapping の読み取り専用を確かめるため、統合テストとは別の条件で1回だけ呼ぶ（evidence-code-review の SHOULD）。
+# Why: 条件は変数に置く。M09 のブロックの if 行（scripts/e2e を含む）と、行の形で区別できるようにするため。
+s14_inputs='^(Dockerfile|squid-config/|wiremock-scenarios/|test-client/|tests/|scripts/scenario-lib\.sh|scripts/e2e|ecs/)'
+if has_match "$s14_inputs"; then
+  run sh tests/s14-taskdef-contract.sh unit
 fi
 
 # M09 の E2E 基盤。unit は Docker と AWS CLI を使わず、smoke は Docker を使うが AWS CLI と認証情報を使わない。
@@ -96,11 +104,8 @@ if has_match '^(scripts/e2e|ecs/|tests/m09-execution-and-ci\.sh$|\.github/workfl
   printf '%s\n' 'NOTE: tests/m09-execution-and-ci.sh contract は利用者の端末と CI だけで実行するため、ゲートでは実行しない'
   run sh tests/m09-execution-and-ci.sh unit
   run sh tests/m09-execution-and-ci.sh smoke
-  # Why: smoke の途中で止まると swsc- のコンテナが残るため、既存の M08 と同じく、ブロックの最後に残存を確かめる。
-  if [ -n "$(docker ps -aq --filter label=swsc.managed=true 2>/dev/null || true)" ]; then
-    printf '%s\n' 'FAILED: M09 のコンテナ（swsc-）が残っている' >&2
-    status=1
-  fi
+  # Why: smoke の途中で止まると swsc- のコンテナが残るため、ブロックの最後に残存を確かめる。
+  managed_check 'M09 のコンテナ（swsc-）が残っている、または確かめられない'
 fi
 
 if [ "$status" -eq 0 ]; then

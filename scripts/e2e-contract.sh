@@ -20,6 +20,8 @@ swsc_contract_exit() { # 終了コード
     swsc_collect || true
   fi
   swsc_contract_remove_ministack
+  # Why: ロックは MiniStack を消した後に解放する。解放の前に別の実行が入ると、同じ4566を取り合うため。
+  swsc_lock_leave || [ "$_rc" -ne 0 ] || _rc=1
   exit "$_rc"
 }
 
@@ -52,6 +54,8 @@ swsc_contract_wait_ready() {
 # 契約検証の本体。手順は plan.md 3.5 の表に従う。成功なら 0、失敗なら 1。
 # 前提検査（認証情報を含む）は、呼び出し元（scripts/e2e.sh）が済ませている。
 contract_main() {
+  # Why: ロックは trap より前に取る。取れないときに MiniStack の削除を走らせると、他の実行の4566を壊すため。
+  swsc_lock_enter || return 1
   trap 'swsc_contract_exit "$?"' EXIT
   trap 'exit 130' INT
   trap 'exit 143' TERM
