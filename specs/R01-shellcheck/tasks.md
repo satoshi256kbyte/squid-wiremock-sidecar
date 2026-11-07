@@ -76,7 +76,7 @@ pushとPR作成は利用者の端末で実行する。AGENTS.mdの「コミッ�
 
 | タスクID | 内容 | 対象ファイル | 対応するFR/NFR | 先に赤にする検査（unitのケース名） | 完了の確認方法 | 実行主体 | バッチ |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| T-R0120 | SC1090の23件を解消する。読み込み先が決まる行は`# shellcheck source=`、一時ファイルを読む行は`source=/dev/null`と理由を書く。完了後に指摘を取り直す。 | `tests/m09-execution-and-ci.sh` | FR-R0107、FR-R0109、FR-R0111 | なし | SC1090の件数が0になり、`sh tests/m09-execution-and-ci.sh unit`が終了コード0になる。 | 実装サブエージェント | C-1 |
+| T-R0120 | SC1090の23件を解消する。すべて`# shellcheck source=/dev/null`と理由を書く（`plan.md` 4.4節の注。`source=`の宣言は、shellcheckが終わらなくなるため使わない）。完了後に指摘を取り直す。 | `tests/m09-execution-and-ci.sh` | FR-R0107、FR-R0109、FR-R0111 | なし | SC1090の件数が0になり、`sh tests/m09-execution-and-ci.sh unit`が終了コード0になる。 | 実装サブエージェント | C-1 |
 | T-R0121 | SC2031の20件とSC2030の18件を解消する。サブシェルによる隔離が意図の行は理由付きで個別に除外し、サブシェルを外す修正はしない。 | `tests/m09-execution-and-ci.sh` | FR-R0107、FR-R0111 | なし | SC2030とSC2031の件数が0になり、`sh tests/m09-execution-and-ci.sh unit`が終了コード0になる。 | 実装サブエージェント | C-1 |
 | T-R0122 | 取り直した一覧のSC2016のうち、行番号の小さい順に20件を解消する。偽のコマンド本文、子のshellの文字列、入力値の意図を1件ずつ確かめ、理由を書く。迷う行は修正に回し、できなければ一覧に残す。 | `tests/m09-execution-and-ci.sh` | FR-R0107、FR-R0111 | なし | 対象20件が除外または修正され、一覧に残す行が記録され、unitが終了コード0になる。 | 実装サブエージェント | C-1 |
 | T-R0123 | 残りのSC2016（19件）を同じ基準で解消する。 | `tests/m09-execution-and-ci.sh` | FR-R0107、FR-R0111 | なし | SC2016の残りが0件（一覧に残す行を除く）で、unitが終了コード0になる。 | 実装サブエージェント | C-2 |
