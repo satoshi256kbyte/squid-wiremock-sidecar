@@ -43,7 +43,7 @@ Issue本文には、目的、Spec Kitの保存先、対象範囲、完了条件�
 
 対象はM01からM05とする。
 
-- 3サービスをComposeで起動できる
+- 3サービスを起動できる（当時はComposeで確かめた。S26でECSタスク定義方式へ移行し、Composeは削除した）
 - Test ClientからSquidを経由してWireMockへ通信できる
 - 許可対象外の外部通信を成功させない
 - SquidとWireMockのログで通信経路を確認できる

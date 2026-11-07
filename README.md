@@ -154,18 +154,6 @@ E2E スイートの実行方法、4シナリオの期待値、失敗時の見方
 ## Development Workflow
 
 現在の入口は、次の「新基盤の実行（npm run）」です。
-下の「旧 Compose 手順」は現行の手順ではありません。移行完了後に削除します（`docker-compose.yml` の削除（T2630）と同時）。
-
-```bash
-# 旧 Compose 手順（docker-compose.yml の削除（T2630）と同時に削除する）
-# ローカルテスト（Colima 環境）
-export DOCKER_HOST=unix:///Users/satoshi/.colima/default/docker.sock
-pnpm start           # docker-compose up -d
-pnpm test            # E2E テスト実行
-pnpm logs            # ログ確認
-pnpm stop            # docker-compose down
-pnpm clean           # リソース完全削除
-```
 
 ### 新基盤の実行（npm run）
 

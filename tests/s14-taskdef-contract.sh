@@ -124,17 +124,29 @@ s14_squid_not_published() {
   [ -f "$_run/swsc-squid.args" ] || return 1
   ! grep -Eq -- '^(-p|-P|--publish|--publish-all)' "$_run/swsc-squid.args" || return 1
   ! grep -Eq -- ':3128' "$_run/swsc-squid.args" || return 1
-  # ランナーの公開指定は、数字で始まる -p（docker run の公開）の1件だけで、127.0.0.1 の 8080 に限る。
+  # ランナーの公開指定は、数字で始まる -p（空白なしの -p8080:8080 も含む docker run の公開）の1件だけで、127.0.0.1 の 8080 に限る。
   # mkdir -p のような別のコマンドの -p は数えない。
-  [ "$(grep -Ec -- ' -p [0-9]' scripts/e2e-runner.sh || true)" -eq 1 ] || return 1
+  # Why: grep -c は行の数を数え、同じ行の2つ目の -p を見落とすため、一致した数を数える。
+  [ "$(grep -Eo -- ' -p ?[0-9]' scripts/e2e-runner.sh | wc -l | tr -d ' ')" -eq 1 ] || return 1
   grep -Fq -- ' -p 127.0.0.1:8080:8080' scripts/e2e-runner.sh || return 1
-  ! grep -Eq -- '--publish|3128:|0\.0\.0\.0:' scripts/e2e-runner.sh
+  # -P と --publish-all は全ポートを全インターフェースへ公開するため、ランナーに置かない。
+  ! grep -Eq -- ' -P( |$)|--publish|3128:|0\.0\.0\.0:' scripts/e2e-runner.sh
+}
+
+# 許可ドメインは、有効な行（空行と # のコメントを除く）が2件だけで、内容も固定する。
+# Why: 行を足すと、SQUID_UPSTREAM=direct のときに、レビューを経ずに外部への通信先が広がるため（旧 S14 の検査を引き継ぐ）。
+s14_allowlist_fixed() {
+  _w=squid-config/whitelist.txt
+  _got=$(grep -Ev '^[[:space:]]*(#|$)' "$_w" | sort)
+  _want=$(printf '%s\n' api-staging.example.com api.example.com | sort)
+  [ "$_got" = "$_want" ]
 }
 
 check 's14_acl_lines: 固定の ACL 行と許可・拒否の行が規定どおり' s14_acl_lines
 check 's14_derived_config_parse: 派生設定の指令が既知の指令だけで、不正な値を拒否する' s14_derived_config_parse
 check 's14_mapping_readonly: WireMock のシナリオが読み取り専用で渡される' s14_mapping_readonly
 check 's14_squid_not_published: Squid の 3128 がホストへ公開されない' s14_squid_not_published
+check 's14_allowlist_fixed: 許可ドメインが api.example.com と api-staging.example.com の2件だけ' s14_allowlist_fixed
 
 # この検査は Docker を呼ばない。呼ばれていたら、検査の前提が崩れているため失敗にする。
 if [ -e "$TMP/docker-calls" ]; then

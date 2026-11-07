@@ -1,0 +1,42 @@
+# S26 T2631 Compose 呼び出しの一回限りの grep
+
+実行日時: 2026-11-07T07:12:55Z
+コミット: f8e6582（作業ツリーに docker-compose.yml の削除を含む）
+対象: scripts tests ecs .github docs README.md AGENTS.md package.json（specs/ は除外）
+パターン: (^|[[:space:]"'(=])docker(-compose| compose)([[:space:]]|$)
+git grep の終了コード: 0（0 は一致あり、1 は一致なし）
+
+## 一致した全行（コメントを含む）
+
+tests/m09-execution-and-ci.sh:104:  make_fake docker-compose "$1" "$TMP/rec-compose"
+tests/m09-execution-and-ci.sh:262:# docker-compose の呼び出しを、コマンドの位置で探す（コメントは対象外）。
+tests/m09-execution-and-ci.sh:268:  printf 'docker compose up -d\n' >"$TMP/a.sh"
+tests/m09-execution-and-ci.sh:269:  printf 'true && docker-compose up\n' >"$TMP/b.sh"
+tests/m09-execution-and-ci.sh:270:  printf 'x=$(docker compose ps)\n' >"$TMP/c.sh"
+tests/m09-execution-and-ci.sh:271:  printf '    run: docker-compose down\n' >"$TMP/d.yml"
+tests/m09-execution-and-ci.sh:1184:echo "docker-compose $*" >>"$SWSC_TEST_SEQ"
+tests/m09-execution-and-ci.sh:1508:echo "docker-compose $*" >>"$SWSC_TEST_SEQ"
+tests/m09-execution-and-ci.sh:1595:# 旧基盤のdocker-composeは、どの操作でも呼ばれない（偽の docker-compose が記録する）。
+tests/m09-execution-and-ci.sh:3619:  check '全操作で docker-compose を呼ばない' t_all_operations_never_call_docker_compose
+tests/m09-execution-and-ci.sh:3676:  check 'docker compose と docker-compose を呼ばない' t_wf_has_no_docker_compose_call
+
+## 除外
+
+- コメント行（# で始まる行）: 説明であり、呼び出しではない
+- tests/m09-execution-and-ci.sh: FR-920 の検出パターンと、偽の docker-compose を PATH に置く検査。呼び出しではない
+
+除外した tests/m09-execution-and-ci.sh の行:
+
+tests/m09-execution-and-ci.sh:104:  make_fake docker-compose "$1" "$TMP/rec-compose"
+tests/m09-execution-and-ci.sh:268:  printf 'docker compose up -d\n' >"$TMP/a.sh"
+tests/m09-execution-and-ci.sh:269:  printf 'true && docker-compose up\n' >"$TMP/b.sh"
+tests/m09-execution-and-ci.sh:270:  printf 'x=$(docker compose ps)\n' >"$TMP/c.sh"
+tests/m09-execution-and-ci.sh:271:  printf '    run: docker-compose down\n' >"$TMP/d.yml"
+tests/m09-execution-and-ci.sh:1184:echo "docker-compose $*" >>"$SWSC_TEST_SEQ"
+tests/m09-execution-and-ci.sh:1508:echo "docker-compose $*" >>"$SWSC_TEST_SEQ"
+tests/m09-execution-and-ci.sh:3619:  check '全操作で docker-compose を呼ばない' t_all_operations_never_call_docker_compose
+tests/m09-execution-and-ci.sh:3676:  check 'docker compose と docker-compose を呼ばない' t_wf_has_no_docker_compose_call
+
+## 結果
+
+呼び出しとしての一致: 0 件

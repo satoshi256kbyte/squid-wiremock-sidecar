@@ -2837,8 +2837,12 @@ t_doc_gate_summary_covers_g1_to_g5() {
   done
 }
 
+# S26: 旧 S14 が見ていた文書と設定（ポート公開範囲の文書、Squid の設定、ecs/）も対象にする。
 t_doc_has_no_identity_values() {
-  for _f in "$ROOT/docs/ローカル実行とCI.md" "$ROOT/README.md" "$ROOT/AGENTS.md"; do
+  for _f in "$ROOT/docs/ローカル実行とCI.md" "$ROOT/README.md" "$ROOT/AGENTS.md" \
+    "$ROOT/docs/ポート公開範囲.md" "$ROOT/squid-config/squid.conf" "$ROOT/squid-config/whitelist.txt" \
+    "$ROOT/ecs/task-definition.template.json" "$ROOT/ecs/squid/Dockerfile" "$ROOT/ecs/squid/derive-config.sh" \
+    "$ROOT/ecs/squid/entrypoint.sh"; do
     [ -f "$_f" ] || return 1
     ! grep -Eq '[0-9]{12}|arn:aws|AKIA' "$_f" || return 1
   done
@@ -2852,10 +2856,12 @@ t_doc_readme_links_and_lists_npm_run() {
   done
 }
 
-t_doc_readme_keeps_old_compose_marked() {
+# S26 T2630: Compose の削除とともに、README の旧 Compose 手順も削除した。現行の手順だけを載せる。
+t_doc_readme_has_no_old_compose_procedure() {
   _readme="$ROOT/README.md"
-  grep -Fq 'docker-compose up -d' "$_readme" || return 1
-  grep -Fq '移行完了後に削除' "$_readme"
+  ! grep -Fq 'docker-compose' "$_readme" || return 1
+  ! grep -Fq '旧 Compose 手順' "$_readme" || return 1
+  [ ! -e "$ROOT/docker-compose.yml" ]
 }
 
 t_doc_agents_row_registers_unit_smoke_not_contract() {
@@ -2918,7 +2924,7 @@ t_gate_m09_block_condition_covers_targets_and_squid_inputs() {
   done
 }
 
-t_gate_m09_block_placed_after_compose_block_and_before_summary() {
+t_gate_m09_block_placed_after_integration_check_and_before_summary() {
   _gf=$ROOT/scripts/quality-gate.sh
   _m08=$(grep -n "managed_check '統合テストの後" "$_gf" | cut -d: -f1)
   _gif=$(grep -n "^if has_match '.*scripts/e2e" "$_gf" | cut -d: -f1)
@@ -3691,14 +3697,14 @@ run_unit() {
   check '文書のゲートの結果は G1 から G5 を含む' t_doc_gate_summary_covers_g1_to_g5
   check '文書、README、AGENTS.md に識別情報（12桁の数字、arn:aws、AKIA）が無い' t_doc_has_no_identity_values
   check 'README は文書へのリンクと npm run の6操作を載せる' t_doc_readme_links_and_lists_npm_run
-  check 'README の旧 Compose 手順は残り、移行完了後に削除と明記する' t_doc_readme_keeps_old_compose_marked
+  check 'README に旧 Compose 手順が無く、docker-compose.yml も無い' t_doc_readme_has_no_old_compose_procedure
   check 'AGENTS.md の品質ゲート表に M09 の行があり、unit と smoke を登録し contract は登録しないと書く' t_doc_agents_row_registers_unit_smoke_not_contract
   check 'M07、M08、S14 が検査する README の行とリンクが残っている' t_doc_keeps_lines_checked_by_m07_m08_s14
   printf '== T917 品質ゲートへの登録\n'
   check 'ゲートに M09 のブロックがあり、閉じている' t_gate_m09_block_exists_and_is_closed
   check 'unit を smoke より前に、別の run で呼ぶ' t_gate_m09_block_registers_unit_then_smoke_as_separate_runs
   check '実行条件は M09 の対象と Squid、Client、WireMock、Dockerfile の変更' t_gate_m09_block_condition_covers_targets_and_squid_inputs
-  check 'ブロックは既存の Compose ブロックの後、結果の判定の前にある' t_gate_m09_block_placed_after_compose_block_and_before_summary
+  check 'ブロックは統合テストの残存検査の後、結果の判定の前にある' t_gate_m09_block_placed_after_integration_check_and_before_summary
   check 'smoke の後に swsc- のコンテナの残存を確かめ、残れば status=1 にする' t_gate_m09_block_checks_leftover_containers_after_smoke
   check 'contract は登録せず、理由の NOTE 行がある' t_gate_does_not_register_contract_and_states_why
   check 'ブロックは AWS CLI と認証情報の変数を参照しない' t_gate_m09_block_has_no_aws_or_credentials
