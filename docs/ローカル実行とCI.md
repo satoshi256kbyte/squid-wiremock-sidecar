@@ -152,8 +152,8 @@ Squid が内部で出す要求（`/squid-internal-periodic/` など）は数え�
 | --- | --- | --- | --- |
 | 1 | `unit` | `sh tests/m09-execution-and-ci.sh unit` | 3分 |
 | 2 | `test-ci` | `npm run test:ci` の後に、M08 の4シナリオを `sh scripts/e2e.sh test:ci normal error-500-then-200 ratelimit-429 slow-5000` で実行する | 10分 |
-| 3 | `smoke` | `sh tests/m09-execution-and-ci.sh smoke` | 8分（仮値） |
-| 4 | `contract` | `sh tests/m09-execution-and-ci.sh contract` | 5分（仮値） |
+| 3 | `smoke` | `sh tests/m09-execution-and-ci.sh smoke` | 8分 |
+| 4 | `contract` | `sh tests/m09-execution-and-ci.sh contract` | 5分 |
 | 5 | `collect` | `sh scripts/e2e.sh collect`。失敗しても必ず実行する | - |
 | 6 | アップロード | `e2e-logs/` を保存する。失敗時だけ実行する | - |
 | 7 | `stop` | `npm run stop`。必ず実行する | - |
@@ -167,9 +167,23 @@ Squid が内部で出す要求（`/squid-internal-periodic/` など）は数え�
 
 ## 所要時間の目安
 
-CI の値は、CI の初回実行で実測する。ここには、まだ書かない。
-上の表の上限は、実測の前に置いた仮の値である。実測の結果で見直す。
-ジョブの上限は15分である。`test:ci` の上限は10分である。
+CI の値は、CI の初回実行で実測した（PR #29、`ubuntu-24.04`、2026-11-07）。
+
+| ステップ | M09 の初回（PR #25） | S26 の初回（PR #29） | 上限 | 上限の根拠 |
+| --- | --- | --- | --- | --- |
+| `unit` | 22秒 | 29秒 | 3分 | 実測の6倍以上。実の Docker を使わず（偽の `docker` で検査する）、起動の待ち上限に依存しない |
+| `test-ci` | 37秒 | 57秒 | 10分 | 実測の10倍以上。起動は2回で、各回に WireMock の待ちと Squid の healthy 待ちがある（それぞれ上限は `SWSC_WAIT_SECONDS`、既定120秒） |
+| `smoke` | 74秒 | 85秒 | 8分 | 実測の5倍以上。起動の WireMock の待ちと Squid の healthy 待ち（それぞれ上限120秒）を含む |
+| `contract` | 32秒 | 37秒 | 5分 | 実測の8倍以上。MiniStack の待ち上限（`SWSC_CONTRACT_WAIT_SECONDS`、既定120秒）を含む |
+| ジョブ全体 | 約2分46秒 | 212秒 | 15分 | 実測の4倍以上 |
+
+`test-ci` の増分（約20秒）は、M08 の4シナリオによる。シナリオ部分の内訳は、
+`normal` 1秒、`error-500-then-200` 1秒、`ratelimit-429` 6秒、`slow-5000` 1秒、合計9秒である。
+残りは、4シナリオ用の起動と停止である。
+
+どの上限も実測に対して十分な余裕があるため、初回の実測では上限を変えていない。
+上限は、待ち上限で止まる失敗を、ジョブの上限より先にステップの上限で見つけるための値である。
+実測が上限の半分を超えたら、原因を調べてから上限を見直す。
 
 ローカルの実測は参考であり、CI の値ではない（ローカル実測、Linux aarch64 の EC2）。
 

@@ -2821,7 +2821,13 @@ t_doc_stop_uses_rm_f_and_states_sigterm() {
 }
 
 t_doc_duration_defers_to_ci() {
-  sed -n '/^## 所要時間の目安$/,/^## /p' "$ROOT/docs/ローカル実行とCI.md" | grep -Fq 'CI の初回実行で実測する'
+  # S26 T2626: 初回CIの実測値と、上限の根拠を書く。
+  _sec=$(sed -n '/^## 所要時間の目安$/,/^## 再現性/p' "$ROOT/docs/ローカル実行とCI.md")
+  printf '%s\n' "$_sec" | grep -Fq 'CI の初回実行で実測した' || return 1
+  for _s in unit test-ci smoke contract; do
+    printf '%s\n' "$_sec" | grep -q "^| \`$_s\` |.*秒 |.*分 |" || return 1
+  done
+  printf '%s\n' "$_sec" | grep -Fq '上限の根拠'
 }
 
 t_doc_gate_summary_covers_g1_to_g5() {
@@ -3681,7 +3687,7 @@ run_unit() {
   check '文書の起動順は WireMock、管理API、pause、Squid の順である' t_doc_startup_order_is_wiremock_pause_squid
   check '文書の受信数は /api/ で始まるURLだけを数えると書く' t_doc_counts_api_urls_only
   check '文書の停止は docker rm -f で、SIGTERM の制約を書く' t_doc_stop_uses_rm_f_and_states_sigterm
-  check '文書の所要時間は CI の初回実行で実測すると書く' t_doc_duration_defers_to_ci
+  check '文書の所要時間は CI の初回実行の実測値と上限の根拠を書く' t_doc_duration_defers_to_ci
   check '文書のゲートの結果は G1 から G5 を含む' t_doc_gate_summary_covers_g1_to_g5
   check '文書、README、AGENTS.md に識別情報（12桁の数字、arn:aws、AKIA）が無い' t_doc_has_no_identity_values
   check 'README は文書へのリンクと npm run の6操作を載せる' t_doc_readme_links_and_lists_npm_run

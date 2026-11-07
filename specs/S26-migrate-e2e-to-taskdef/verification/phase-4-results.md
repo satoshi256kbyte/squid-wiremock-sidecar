@@ -96,3 +96,29 @@ T2625（初回CI）で確かめること:
 | 修正 | `lock_case_dir`の既定を`${KIROCREW_SCRATCH:-${TMPDIR:-/tmp}}`にする |
 | 確認 | 直す前の版は、`KIROCREW_SCRATCH`と`TMPDIR`を外したCIと同じ条件で同じエラーになった。直した版は同じ条件で223件全て通過し、`/tmp/swsc-lock-case.*`は残らなかった |
 | レビュー | `evidence-code-review`はCritical・High・Mediumなし、Low 1件（検査が途中で失敗すると、空の置き場が`/tmp`に1件残る。CIのランナーは使い捨てで、手元はscratchに置くため対応しない）。`security-review`は指摘0件 |
+
+## 9. 初回CIの実測（T2625、T2626）
+
+修正後のCI（PR #29、`ed048e3`、`ubuntu-24.04`）は成功した。PRの状態は`CLEAN`である。
+
+| ステップ | 結果 | 所要時間 | 上限 |
+| --- | --- | --- | --- |
+| `unit` | 223件通過 | 29秒 | 3分 |
+| `test-ci` | `npm run test:ci`とM08の4シナリオがPASS | 57秒 | 10分 |
+| `smoke` | 通過 | 85秒 | 8分 |
+| `contract` | 6件通過 | 37秒 | 5分 |
+| ジョブ全体 | 成功 | 212秒 | 15分 |
+
+M08の4シナリオのシナリオ部分は9秒（`normal` 1秒、`error-500-then-200` 1秒、`ratelimit-429` 6秒、`slow-5000` 1秒）だった。
+`test-ci`はM09の初回（37秒）から約20秒増えた。どの上限も実測の4倍以上の余裕があるため、上限は変えていない。
+実測値と上限の根拠は、`docs/ローカル実行とCI.md`の「所要時間の目安」へ反映した。CI定義は、`smoke`と`contract`の「仮置き」のコメントだけを直した。job名とstep名は変えていない。
+
+contractはCIで通過したため、T2625の確認はCIの結果で足りるとした。
+失敗時のアーティファクトは、成功のため作られていない。識別情報が出ないことの実物での確認は、未実施である。
+
+T2626のコミット前の必須レビュー:
+
+| レビュー | 結果 | 対応 |
+| --- | --- | --- |
+| `evidence-code-review` | Critical・High・Mediumなし。SHOULD 1件、BETTER 1件（上限の根拠の書き方） | 対応した。`unit`は偽の`docker`で検査し、起動の待ち上限に依存しないと書く。`test-ci`と`smoke`は、起動ごとにWireMockの待ちとSquidのhealthy待ちがあると書く |
+| `security-review` | 指摘0件 | なし |
