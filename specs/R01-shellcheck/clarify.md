@@ -34,7 +34,7 @@ note 113件のinfoとstyleの内訳、品質ゲートでの実行時間は未確
 
 | 確認した事実（ファイル:行） | 選択肢 | 推奨 | 推奨の理由 | 利用者の確認が必要か（要/不要） |
 | --- | --- | --- | --- | --- |
-| CIは1つの`e2e`jobで、unit、test-ci、smoke、contractの順に実行する。job上限は15分で、実測は212秒である。`.github/workflows/e2e-test.yml:23-47`、`docs/ローカル実行とCI.md`。CIは品質ゲートを実行しないため、品質ゲートにshellcheckを足すだけではCIで強制されない。 | A案は既存の`e2e`jobの前段にstepを追加する。B案は専用jobに分ける。C案はCIでは実行しない。 | A案。checkoutの直後、`unit`の前に`shellcheck`stepを置く。品質ゲートと同じ対象一覧とオプションで実行し、`timeout-minutes: 2`を付ける。 | 必須ステータスチェック名`e2e`が変わらず、ブランチ保護の設定を変えずに強制できる。B案は新しいチェック名が増え、必須に追加するまで強制されない。shellcheckはDockerを使わないため、`unit`より前で失敗させても資源は残らない。 | 不要 |
+| CIは1つの`e2e`jobで、unit、test-ci、smoke、contractの順に実行する。job上限は15分で、実測は212秒である。`.github/workflows/e2e-test.yml:23-47`、`docs/ローカル実行とCI.md`。CIは品質ゲートを実行しないため、品質ゲートにshellcheckを足すだけではCIで強制されない。 | A案は既存の`e2e`jobの前段にstepを追加する。B案は専用jobに分ける。C案はCIでは実行しない。 | A案。checkoutの直後、`unit`の前に`shellcheck`stepを置く。品質ゲートと同じ対象一覧とオプションで実行し、`timeout-minutes: 3`を付ける。 | 必須ステータスチェック名`e2e`が変わらず、ブランチ保護の設定を変えずに強制できる。B案は新しいチェック名が増え、必須に追加するまで強制されない。shellcheckはDockerを使わないため、`unit`より前で失敗させても資源は残らない。上限は、実測が約74秒（m09が52.6秒、残り19ファイルが21.8秒）で、2分では余裕が小さいため、最初から3分にする（利用者の判断、2026-11-07）。 | 不要（上限は利用者が決定済み） |
 
 ## Q-R0105 導入方法
 
@@ -104,7 +104,7 @@ miseの導入手順（Homebrew、公式のインストーラーなど）と、`m
 
 | 確認した事実（ファイル:行） | 選択肢 | 推奨 | 推奨の理由 | 利用者の確認が必要か（要/不要） |
 | --- | --- | --- | --- | --- |
-| Markdownゲート（`scripts/quality-gate.sh`の`markdownlint-cli2`の確認）は、依存の未導入で成功扱いにせず失敗する。 | A案は版が異なれば失敗とする。B案は警告に留める。 | A案。shellcheckは`mise exec -- shellcheck`で実行する。期待する版は`mise current shellcheck`で得る（`mise.toml`を自前で解析しない）。miseが無い、未導入、または版が異なるときは失敗させ、miseの導入と`mise install --locked`を示す。PATH上の別の経路のshellcheckは使わない。 | 版で指摘の内容が変わるため、版の不一致は判定の弱体化につながる。 | 不要 |
+| Markdownゲート（`scripts/quality-gate.sh`の`markdownlint-cli2`の確認）は、依存の未導入で成功扱いにせず失敗する。 | A案は版が異なれば失敗とする。B案は警告に留める。 | A案。`mise exec`は使わず、`mise which shellcheck`でmiseが入れた実体のパスを得て、そのパスを実行する。期待する版は`mise current shellcheck`で得る（`mise.toml`を自前で解析しない）。miseが無い、未導入、または版が異なるときは失敗させ、miseの導入と`mise install --locked`を示す。PATH上の別の経路のshellcheckは使わない。 | 版で指摘の内容が変わるため、版の不一致は判定の弱体化につながる。`mise exec -- shellcheck`は、未導入のときにPATH上の別のshellcheckで成功してしまい、「別の経路は使わない」を守れない（実機で確認済み。`mise which`は未導入なら`shellcheck is not a mise bin`で終了コード1）。 | 不要 |
 
 ## Q-R0111 コミットの分割
 
@@ -122,9 +122,11 @@ miseの導入手順（Homebrew、公式のインストーラーなど）と、`m
 
 | レビュー | 結果 | 対応 |
 | --- | --- | --- |
-| `evidence-code-review` | MUSTなし。SHOULD 2件、NITS 1件 | 対応した。一時ファイルによる確認は`git add -N`でindexへ入れてから行い、`git reset`で戻して削除すると書いた。品質ゲートは`mise exec -- shellcheck`で実行し、期待する版を`mise current shellcheck`で得ると決めた（Q-R0110、FR-R0102）。行番号を節の名前に直した |
-| `security-review`（1回目） | Medium 2件、Low 3件、要確認2件 | 対応した。miseの設定ファイルで任意のコードを実行させないNFR-R0109、取得物の完全性とキャッシュのNFR-R0110を足した。安全に関わる指摘は迷う行を修正する基準をQ-R0107とFR-R0111、AC-R0107に足した。`git reset`は対象のパスだけにした。`--locked`をActionの入力か`MISE_LOCKED=1`で明示すると書いた（FR-R0115）。`security-review`を再実行する |
-| `security-review`（2回目） | Critical・High・Mediumなし。前回の6件は全て解消。Low 3件、要確認1件 | 対応した。迷う行の基準の矛盾を直した（FR-R0111、Q-R0107）。`mise exec`の自動の導入を止めて`MISE_LOCKED=1`を明示すると書いた（FR-R0102）。CIの権限を書いた（FR-R0114）。残りの確かめる点を「planで確かめること」に足した |
+| `evidence-code-review` | MUSTなし。SHOULD 2件、NITS 1件 | 対応した。一時ファイルによる確認は`git add -N`でindexへ入れてから行い、`git reset`で戻して削除すると書いた。品質ゲートの実行方法を決め、期待する版を`mise current shellcheck`で得ると決めた（Q-R0110、FR-R0102）。実行方法は、のちに`mise exec`ではなく`mise which shellcheck`の実体へ改めた（analyze.md H-01）。行番号を節の名前に直した |
+| `security-review`（1回目） | Medium 2件、Low 3件、要確認2件 | 対応した。miseの設定ファイルで任意のコードを実行させないNFR-R0109、取得物の完全性とキャッシュのNFR-R0110を足した。安全に関わる指摘は迷う行を修正する基準をQ-R0107とFR-R0111、AC-R0107に足した。`git reset`は対象のパスだけにした。`--locked`を明示すると書いた（FR-R0115）。のちに、CIはActionの入力`install_args`で明示する形に改めた（analyze.md H-02）。`security-review`を再実行する |
+| `security-review`（2回目） | Critical・High・Mediumなし。前回の6件は全て解消。Low 3件、要確認1件 | 対応した。迷う行の基準の矛盾を直した（FR-R0111、Q-R0107）。自動の導入を止めて`MISE_LOCKED=1`を明示すると書いた（FR-R0102）。CIの権限を書いた（FR-R0114）。残りの確かめる点を「planで確かめること」に足した |
+| `evidence-code-review`（planの後） | MUSTなし。SHOULD 2件、BETTER 1件 | 対応した。FR-R0102の版の比較はローカルの品質ゲートだけとし、CIは`--locked`とSHAと版の固定で担保すると書いた。T-R0131の完了条件にm09のshellcheckが0件のままを足した。T-R0142にゲートが変更範囲に関わらずmiseを前提とすることを足した |
+| `security-review`（planの後） | Critical・High・Mediumなし。Low 3件、要確認2件 | 対応した。CIでの`mise.toml`の検査は事後の検知であること、ローカルのmise本体を固定の値で照合すること、mise-actionのトークンがmiseから見えること、信頼していない`mise.toml`での動きの確認を、plan.mdの13章に書いた |
 
 ## planで確かめること
 
@@ -134,6 +136,6 @@ miseの導入手順（Homebrew、公式のインストーラーなど）と、`m
 | `jdx/mise-action` | `mise.lock`があるときに`--locked`で導入するか、`mise.toml`を自動で信頼するか、キャッシュの既定の挙動。`pull_request`でPRのmiseの設定をそのまま実行するか |
 | `mise.lock`の初回の作成 | 4つの環境のURLとSHA256を、shellcheckの公式のリリースと照合した記録（NFR-R0110） |
 | backend | `mise.toml`のshellcheckのbackend（aquaなど）と、`mise.lock`に記録される内容 |
-| `mise exec`の自動の導入 | 品質ゲートで自動の導入を止める設定の正しい名前と、`MISE_LOCKED=1`の効き方（FR-R0102） |
+| miseの自動の導入 | 品質ゲートで自動の導入を止める設定の正しい名前と、`MISE_LOCKED=1`の効き方（FR-R0102） |
 | CIの権限 | `e2e`jobの`permissions`が`contents: read`以下で、checkoutが`persist-credentials: false`のままであること（FR-R0114） |
 | ローカルのmise本体 | macOSとLinuxでの導入元ごとの検証の方法と、推奨する導入の手順（`min_version`は下限だけを決める） |

@@ -16,7 +16,7 @@
 | 実行環境 | CI（ubuntu-24.04）、ローカルのmacOS（Colima利用）、ローカルのLinux |
 | 方言 | `shellcheck -s sh`でPOSIX shellとして検査する |
 | 判定の維持 | 既存の検査の判定と終了コードを弱めない。`sh -n`が検出していた構文エラーは、置き換え後も失敗として検出する |
-| 現状の実測 | shellcheck v0.11.0を`-s sh -f gcc`で下表の20ファイルへ実行した。結果は156件（error 0、warning 43、note 113） |
+| 現状の実測 | shellcheck v0.11.0を`-s sh -f gcc`で下表の20ファイルへ実行した。結果は156件（error 0、warning 43、note 113）。これは`.shellcheckrc`なしの値である。最終の設定（`external-sources=true`、`source-path=SCRIPTDIR`）では`test-client/entrypoint.sh`のSC1091が消え、155件（m09以外43件、m09 112件）になる |
 
 ### 1.1 現状の実測
 
@@ -67,7 +67,7 @@
 | ID | 要件 |
 | --- | --- |
 | FR-R0101 | shellcheckを、一般的なツールのmiseで、版とSHA256を固定して導入する。版は`mise.toml`に、URLとSHA256は`mise.lock`に一か所で宣言し、品質ゲートとCIは同じ版を使う。CIとローカル（macOS、Linux）の両方で導入手順を用意する |
-| FR-R0102 | 品質ゲートとCIは、shellcheckを`mise exec -- shellcheck`で実行し、`mise.toml`と`mise.lock`で固定した版を使う。期待する版はmiseの出力（`mise current shellcheck`）から得て、`mise.toml`を自前で解析しない。miseが無い、shellcheckが未導入、または`mise exec -- shellcheck --version`の版が期待と異なるときは、成功扱いにせず、導入手順（miseの導入と`mise install --locked`）を示して失敗させる。PATH上の別の経路で入れたshellcheckは使わない。品質ゲートの実行では、miseの自動の導入を止め、`MISE_LOCKED=1`を明示して、`--locked`を通らない導入を起こさない（設定の正しい名前はplanで確かめる） |
+| FR-R0102 | 品質ゲートとCIは、`mise exec`を使わず、`mise which shellcheck`でmiseが入れた実体のパスを得て、そのパスのshellcheckを実行する。版は`mise.toml`と`mise.lock`で固定する。期待する版はmiseの出力（`mise current shellcheck`）から得て、`mise.toml`を自前で解析しない。miseが無い、shellcheckが未導入、または実体の`--version`の版が期待と異なるとき（版の比較はローカルの品質ゲートで行う。CIは`--locked`の導入と、mise-actionのSHAと版の固定で担保し、版の比較はしない）は、成功扱いにせず、導入手順（miseの導入と`mise install --locked`）を示して失敗させる。PATH上の別の経路で入れたshellcheckは使わない。`mise exec`を使わない理由は、未導入のときにPATH上の別のshellcheckで成功してしまい、この「別の経路は使わない」を守れないためである（実機で確認済み）。品質ゲートの実行では、miseの自動の導入を止め（`MISE_EXEC_AUTO_INSTALL=false`、`MISE_AUTO_INSTALL=false`）、`MISE_LOCKED=1`を明示して、`--locked`を通らない導入を起こさない |
 | FR-R0103 | `scripts/quality-gate.sh`が対象ファイルへ`shellcheck -s sh -S style`を明示して実行し、`sh -n`のループを置き換える |
 | FR-R0104 | 対象ファイルの集合は、`git ls-files -z '*.sh'`で得る追跡対象とする。パターンの展開は使わず、新しい`.sh`の追加が検査から漏れない |
 | FR-R0105 | shellcheckが未導入のときは、成功扱いにせず、導入手順を示して失敗させる。Markdownゲートの依存未導入時の扱いと同じ方針にする |
@@ -79,8 +79,8 @@
 | FR-R0111 | 修正の範囲は、指摘を解消する最小の変更に限る。判定、終了コード、出力の契約を変えない。修正と個別除外の基準はclarify.mdのQ-R0107に従う。迷う行は、原則は理由付きの個別除外とする。安全に関わる指摘（SC2086、SC2046、SC2016、SC2012）で迷う行は、判定、終了コード、出力を変えない書き方に修正する。それができない行は、除外せずに利用者の判断に上げる。SC2016とSC2012の除外は、根拠（意図した展開か、検査が管理する入力か）をAC-R0107のレビューで1件ずつ確かめる。SC2086とSC2046を除外できるのは、値の出どころが固定の文字列か検査の中で作った値と示せ、空白とグロブの文字を含まないと確かめた場合だけとし、理由に出どころを書く |
 | FR-R0112 | `sh -n`が検出していた構文エラーを、shellcheckが同等に検出することを確認する。意図的な構文エラーを持つ一時ファイルで失敗を確認する。一時ファイルは`git ls-files`の対象に入らないため、`git add -N`で一時的にindexへ入れてから品質ゲートを実行し、確認後に`git reset -- <一時ファイルのパス>`でその1つだけをindexから外し、ファイルを削除する（パスを指定しない`git reset`は、利用者がステージした変更まで外すため使わない） |
 | FR-R0113 | `AGENTS.md`の品質ゲートの表と`docs/ローカル実行とCI.md`を、新しいゲートの内容、導入手順、版の固定方法と一致させる |
-| FR-R0114 | `.github/workflows/e2e-test.yml`の`e2e`jobの`unit`の前に`shellcheck`stepを置く。品質ゲートと同じ対象一覧とオプションで実行し、`timeout-minutes: 2`を付ける。jobの名前（必須ステータスチェック名`e2e`）は変えない。jobの`permissions`は`contents: read`以下とし、checkoutは`persist-credentials: false`のままとする（変更しないことをplanで確かめる） |
-| FR-R0115 | CIは`jdx/mise-action`をコミットのSHAで固定して使い、`mise.lock`に従って`--locked`で導入する。`--locked`は、Actionの入力か環境変数`MISE_LOCKED=1`で明示し、既定の挙動に頼らない。miseの版も固定する。`mise.lock`の差分は、shellcheckの公式リリースのURLとSHA256だけであることをレビューで確かめる |
+| FR-R0114 | `.github/workflows/e2e-test.yml`の`e2e`jobの`unit`の前に`shellcheck`stepを置く。品質ゲートと同じ対象一覧とオプションで実行し、`timeout-minutes: 3`を付ける（上限の根拠は、実測が約74秒（m09が52.6秒、残り19ファイルが21.8秒）で、2分では余裕が小さいことと、利用者の判断（2026-11-07））。jobの名前（必須ステータスチェック名`e2e`）は変えない。jobの`permissions`は`contents: read`以下とし、checkoutは`persist-credentials: false`のままとする（変更しないことをplanで確かめる） |
+| FR-R0115 | CIは`jdx/mise-action`をコミットのSHAで固定して使い、`mise.lock`に従って`--locked`で導入する。`--locked`は、Actionの入力`install_args`に明示し（`install_args: --locked shellcheck`）、`mise.lock`があると自動で足されるActionの既定に頼らない。`MISE_LOCKED=1`は品質ゲート（ローカル）の側で明示する。miseの版も固定する。`mise.lock`の差分は、shellcheckの公式リリースのURLとSHA256だけであることをレビューで確かめる |
 
 ## 4. 非機能要件と検証方法
 
@@ -128,11 +128,11 @@ Issue #33の完了条件を、次の表で対応づける。各条件に受け�
 | --- | --- | --- | --- | --- |
 | #33-1 | AC-R0101 | 固定した版のshellcheckを、CI、ローカルのmacOS、ローカルのLinuxでmiseから導入でき、`shellcheck --version`が`mise.toml`の版と一致する | FR-R0101、FR-R0115、NFR-R0102、NFR-R0103 | 各環境で`mise install --locked`を実行し、版を記録する。`mise.lock`のSHA256が一致しないときは導入が失敗することを確かめる |
 | #33-1 | AC-R0102 | 未導入、または版が異なるときに、品質ゲートが失敗し、導入手順を表示する | FR-R0102、FR-R0105 | PATHからshellcheckを外した状態と、版の異なる状態で品質ゲートを実行し、終了コードと表示を確かめる |
-| #33-1 | AC-R0103 | CIの`e2e`jobに`shellcheck`stepがあり、`unit`の前で実行される。必須ステータスチェック名は`e2e`のままである | FR-R0114 | `e2e-test.yml`の差分とCIの実行結果を確かめる |
+| #33-1 | AC-R0103 | CIの`e2e`jobに`shellcheck`stepがあり、`unit`の前で実行される。必須ステータスチェック名は`e2e`のままである | FR-R0114 | `e2e-test.yml`の差分（`timeout-minutes: 3`を含む）とCIの実行結果を確かめる |
 | #33-2 | AC-R0104 | 品質ゲートが`shellcheck -s sh -S style`を追跡対象の全`.sh`へ実行し、`sh -n`のループがない | FR-R0103、FR-R0104、FR-R0106、NFR-R0101 | `scripts/quality-gate.sh`の差分と、`sh -n`の不在を`grep`で確かめる。shellcheckの失敗が終了コードへ反映されることを、指摘を含む一時ファイルで確かめる。一時ファイルは`git ls-files`の対象に入らないため、`git add -N`で一時的にindexへ入れてから品質ゲートを実行し、確認後に`git reset -- <一時ファイルのパス>`でその1つだけをindexから外し、ファイルを削除する（パスを指定しない`git reset`は、利用者がステージした変更まで外すため使わない） |
 | #33-2 | AC-R0105 | `sh -n`が検出していた構文エラーを、品質ゲートが失敗として検出する | FR-R0112 | 意図的な構文エラーを持つ一時ファイルで品質ゲートが失敗することを確かめる。一時ファイルは`git ls-files`の対象に入らないため、`git add -N`で一時的にindexへ入れてから品質ゲートを実行し、確認後に`git reset -- <一時ファイルのパス>`でその1つだけをindexから外し、ファイルを削除する（パスを指定しない`git reset`は、利用者がステージした変更まで外すため使わない） |
 | #33-3 | AC-R0106 | 品質ゲートで、追跡対象の全`.sh`のshellcheckが0件で終わる | FR-R0107、FR-R0109、FR-R0110 | 品質ゲートの実行結果 |
-| #33-3 | AC-R0107 | 除外はすべて個別で、コードと理由をその場に持つ。ファイル全体への除外と、`.shellcheckrc`でのコード単位の無効化がない。SC2086、SC2046、SC2016、SC2012の除外は、出どころの根拠を持つ | FR-R0107、FR-R0108、FR-R0111 | `git grep`で`shellcheck disable`を全件列挙し、理由の有無を確かめる。`.shellcheckrc`の内容を確かめる。SC2086、SC2046、SC2016、SC2012の除外は、件数と各行の妥当性をレビューで1件ずつ確かめる |
+| #33-3 | AC-R0107 | 除外はすべて個別で、コードと理由をその場に持つ。ファイル全体への除外と、`.shellcheckrc`でのコード単位の無効化がない。SC2086、SC2046、SC2016、SC2012の除外は、出どころの根拠を持つ | FR-R0107、FR-R0108、FR-R0111 | `git grep`で`shellcheck disable`を全件列挙し、理由の有無を確かめる。ファイル全体に効く先頭の`# shellcheck disable=`は機械的に検出しないため、列挙結果の各行が対象行の直前にあることをレビューで1件ずつ確かめる。`.shellcheckrc`の内容を確かめる。SC2086、SC2046、SC2016、SC2012の除外は、件数と各行の妥当性をレビューで1件ずつ確かめる |
 | #33-3 | AC-R0108 | 修正が判定、終了コード、出力を変えていない | FR-R0111 | 修正の差分を、Q-R0107の基準と照らして確かめる。M02〜M09の結果が変わらないことで裏づける |
 | #33-4 | AC-R0109 | M02〜M09のunitとsmoke、品質ゲート、CIが通る。品質ゲートの実行時間の増加を記録する | NFR-R0104、NFR-R0105 | 各検査とCIの実行結果、実行時間の実測 |
 | #33-5 | AC-R0110 | `AGENTS.md`の品質ゲートの表と`docs/ローカル実行とCI.md`が、新しいゲート、導入手順、版の固定方法と一致する。`npm run -s lint:md`が指摘0である | FR-R0113、NFR-R0107 | 文書の差分、`lint:md`の結果 |
@@ -147,11 +147,11 @@ Q-R0105とQ-R0111は、利用者の判断（2026-11-07）で決めた。
 | Q-R0101 | 検査する重さの下限 | `-S style`（note以上の全件）を品質ゲートと`.shellcheckrc`の両方に明示する | FR-R0103、FR-R0110 |
 | Q-R0102 | `.shellcheckrc`の要否 | 置く。`shell`、`severity`、`external-sources`、`source-path`だけを宣言し、コード単位の無効化は書かない | 2節、FR-R0108 |
 | Q-R0103 | 読み込み先の宣言方式 | 各行の`# shellcheck source=`を主とし、source-pathは相対パスの基点だけを担う | FR-R0109 |
-| Q-R0104 | CIでの実行 | `e2e`jobの`unit`の前に`shellcheck`stepを追加する | 2節、FR-R0114、AC-R0103 |
+| Q-R0104 | CIでの実行 | `e2e`jobの`unit`の前に`shellcheck`stepを追加する。stepの上限は3分（実測約74秒、利用者の判断） | 2節、FR-R0114、AC-R0103 |
 | Q-R0105 | 導入方法 | 一般的なツールのmiseで、版とSHA256を固定して導入する。自前の導入用シェルは作らない（利用者の判断） | FR-R0101、FR-R0115、NFR-R0102、AC-R0101 |
 | Q-R0106 | 既存156件の解消の進め方 | このIssueで全件を修正または理由付きの個別除外にする。ゲートの置き換えより前に完了する | AC-R0106 |
 | Q-R0107 | 修正と個別除外の判断基準 | 指摘コードごとの基準をclarify.mdに定めた。迷う行は理由付きの個別除外 | FR-R0111、AC-R0108 |
 | Q-R0108 | 対象ファイルの集合 | `git ls-files -z '*.sh'`（現在20件） | 2節、FR-R0104 |
 | Q-R0109 | 版の宣言場所 | `mise.toml`と`mise.lock`。`package.json`は変更しない | 2節、FR-R0101 |
-| Q-R0110 | 版の不一致時の扱い | 失敗とし、導入手順を示す | FR-R0102、AC-R0102 |
+| Q-R0110 | 版の不一致時の扱い | 失敗とし、導入手順を示す。実行は`mise exec`ではなく`mise which shellcheck`の実体で行う | FR-R0102、AC-R0102 |
 | Q-R0111 | コミットの分割 | PRは1つ。版の宣言（`mise.toml`、`mise.lock`）と`.shellcheckrc`、m09以外の解消、m09の解消、ゲートの置き換えとCI、文書の5コミット（利用者の判断） | plan |
