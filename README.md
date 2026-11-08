@@ -137,6 +137,10 @@ E2E スイートの実行方法、4シナリオの期待値、失敗時の見方
 - Docker（`docker run` で直接起動する。Compose は使わない）
 - Node.js 22+（`npm run` の入口と Markdown 検査）
 - curl（動作確認時）
+- mise（`mise.toml` の `min_version` が下限で、2026.11.3 以上が必要。`mise install --locked` で shellcheck を含む必要なツールを導入する）
+- shellcheck（mise で導入する。版は `mise.toml` と `mise.lock` で固定。品質ゲートが毎回検査する）
+
+導入と版の固定、CI の step は [ローカル実行とCI](docs/ローカル実行とCI.md) を参照する。
 
 ## Implementation Roadmap
 

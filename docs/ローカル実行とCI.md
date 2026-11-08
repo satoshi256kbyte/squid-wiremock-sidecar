@@ -150,13 +150,15 @@ Squid が内部で出す要求（`/squid-internal-periodic/` など）は数え�
 
 | 順序 | ステップ | 内容 | 上限 |
 | --- | --- | --- | --- |
-| 1 | `unit` | `sh tests/m09-execution-and-ci.sh unit` | 3分 |
-| 2 | `test-ci` | `npm run test:ci` の後に、M08 の4シナリオを `sh scripts/e2e.sh test:ci normal error-500-then-200 ratelimit-429 slow-5000` で実行する | 10分 |
-| 3 | `smoke` | `sh tests/m09-execution-and-ci.sh smoke` | 8分 |
-| 4 | `contract` | `sh tests/m09-execution-and-ci.sh contract` | 5分 |
-| 5 | `collect` | `sh scripts/e2e.sh collect`。失敗しても必ず実行する | - |
-| 6 | アップロード | `e2e-logs/` を保存する。失敗時だけ実行する | - |
-| 7 | `stop` | `npm run stop`。必ず実行する | - |
+| 1 | mise の導入（`jdx/mise-action`） | mise を固定版で導入し、`--locked shellcheck` で shellcheck を導入する。名前を付けない `uses` である | 上限なし（job 全体の15分に従う） |
+| 2 | `shellcheck` | `git ls-files` の `*.sh` を、導入した shellcheck で検査する | 3分 |
+| 3 | `unit` | `sh tests/m09-execution-and-ci.sh unit` | 3分 |
+| 4 | `test-ci` | `npm run test:ci` の後に、M08 の4シナリオを `sh scripts/e2e.sh test:ci normal error-500-then-200 ratelimit-429 slow-5000` で実行する | 10分 |
+| 5 | `smoke` | `sh tests/m09-execution-and-ci.sh smoke` | 8分 |
+| 6 | `contract` | `sh tests/m09-execution-and-ci.sh contract` | 5分 |
+| 7 | `collect` | `sh scripts/e2e.sh collect`。失敗しても必ず実行する | - |
+| 8 | アップロード | `e2e-logs/` を保存する。失敗時だけ実行する | - |
+| 9 | `stop` | `npm run stop`。必ず実行する | - |
 
 失敗したときは、実行結果のページの Artifacts から `e2e-logs-<実行ID>-<試行回数>` をダウンロードする。
 保存期間は7日である。
@@ -189,7 +191,7 @@ CI の値は、CI の初回実行で実測した（PR #29、`ubuntu-24.04`、202
 
 | 検査 | 実測（参考） |
 | --- | --- |
-| 品質ゲート（`sh scripts/quality-gate.sh`） | 約445秒 |
+| 品質ゲート（`sh scripts/quality-gate.sh`） | 約450秒（shellcheck の追加前の値。最新の実測は下の表） |
 | M07 の smoke | 約150秒 |
 | M08 の smoke | 約70秒 |
 | `test:ci` の4シナリオ | 約26秒 |
@@ -230,3 +232,174 @@ M09 の前提ゲート（G1 から G5）の結果を要約する。詳細と観�
 | G1 コンテナ名の解決 | 通過（一部は CI で再確認） | WireMock はコンテナ名で解決する。起動順は固定する |
 | G3 pause 方式と送信元 ACL | 通過（一部は CI で再確認） | 期待どおりに動く。`squid.conf` は変更しない |
 | G2 ソケットなしの MiniStack | 通過（一部は CI で再確認） | `1.5.37` に固定する。describe は完成版と一致した |
+
+## shellcheck の導入と品質ゲート
+
+品質ゲート（`sh scripts/quality-gate.sh`）とCIは、シェルスクリプトを shellcheck で検査する。
+shellcheck の版は、mise で固定する。版を変えるときは、この節の手順を使う。
+
+### 前提
+
+- mise。ローカルの版は `2026.11.3` 以上が必要である（`mise.toml` の `min_version` は下限で、固定ではない）。CI だけが `version: 2026.11.3` で固定する。
+- Node.js 22 以上と Docker は、従来どおり必要である。
+- mise の導入は、公式の配布元から取得した実体と `SHASUMS256.txt` を `sha256sum -c` で照合してから、PATH の通る場所へ置く。
+  パイプでシェルへつなぐ導入はしない。
+- macOS では Homebrew の `brew install mise` を候補にする。この経路は未確認である（後の「未確認の項目」を参照）。
+
+### 導入と版の固定
+
+shellcheck の版は、リポジトリの2つのファイルで決まる。
+
+| ファイル | 内容 |
+| --- | --- |
+| `mise.toml` | `min_version = "2026.11.3"` と、`[tools]` の `shellcheck = "0.11.0"` |
+| `mise.lock` | shellcheck の4つの環境（linux-x64、linux-arm64、macos-x64、macos-arm64）の取得先の URL と SHA256 |
+
+導入は次の1行で行う。`--locked` は `mise.lock` に従うことを意味し、記録のない版や取得物は入らない。
+
+```sh
+mise install --locked
+```
+
+`.shellcheckrc` は次の4項目だけを持つ。`disable=` は書かない。
+
+```text
+shell=sh
+severity=style
+external-sources=true
+source-path=SCRIPTDIR
+```
+
+### 品質ゲートでの shellcheck
+
+品質ゲートは、PATH 上の shellcheck を使わない。`mise which shellcheck` が返す実体を使う。
+自動の導入は止める。次の3つの環境変数は、mise を呼ぶ行にだけ付ける。
+
+- `MISE_EXEC_AUTO_INSTALL=false`
+- `MISE_AUTO_INSTALL=false`
+- `MISE_LOCKED=1`
+
+ゲートは次の順に確かめる。どれかが合わない場合は `FAILED:` と導入手順を出して止まる。
+
+1. `mise` が無い。
+2. `mise current shellcheck` で期待する版が得られない。
+3. `mise which shellcheck` で実体が得られない（未導入）。
+4. `--version` の結果が期待する版と違う（版違い）。
+
+失敗したときは、`mise install --locked` を実行してから、ゲートを再実行する。
+検査の対象は `git ls-files` の `*.sh` である。対象が0件のときは成功にしない。
+
+### CI の step
+
+CI は、`unit` より前に次の2つの step を置く（ワークフロー `.github/workflows/e2e-test.yml`）。
+
+- `jdx/mise-action`（タグ v5.2.7 のコミット SHA。先頭は `b44d12e` で、全体は `.github/workflows/e2e-test.yml` の `uses` 行にある）
+  - `version: 2026.11.3`
+  - `sha256` の値は文書に載せない。
+    値は `.github/workflows/e2e-test.yml` の `sha256` と、
+    `specs/R01-shellcheck/verification/phase-1-results.md` の2章を参照する。
+  - `cache: false`、`env: false`
+  - `install_args: --locked shellcheck`
+- `shellcheck` step: `timeout-minutes: 3`。`mise which` の実体で、`git ls-files -z '*.sh'` の一覧を検査する。
+
+`unit` の前に置くのは、検査が落ちたときに Docker を動かさないためである。
+
+CI は `ubuntu-24.04`（x86_64）だけを前提とする。
+`sha256` は linux-x64 の取得物の値である。
+`sha256` は1つの値だけを受け付けるため、値を足さない。
+別の環境（arm64 やほかの OS）で CI を回すときは、その環境の step を分けるか、`matrix` で環境ごとに値を切り替える。
+その場合、`sha256` の値は、その環境の取得物の値に合わせる。
+値が合わない場合、取得は検証で止まる。これは安全側の失敗である。
+
+### mise.lock の再生成
+
+shellcheck の版を上げるときは、次の手順で `mise.lock` を作り直す。
+
+1. `mise.toml` の `shellcheck` の版を、完全な版（例: `0.11.0`）で書き換える。
+2. 次のコマンドで、4つの環境の取得先と SHA256 を作り直す。
+
+   ```sh
+   mise lock --platform linux-x64,linux-arm64,macos-x64,macos-arm64
+   ```
+
+3. 差分が、shellcheck の4つの環境の URL と SHA256 だけであることを確かめる。
+4. 4つの SHA256 を、公式の GitHub リリースの資産の SHA256（API の `digest`）と照合し、結果を記録する。
+5. `mise install --locked` を実行し、品質ゲートを実行する。指摘が増えるときは、後の「修正と除外の件数」の手順で先に解消する。
+
+mise 本体の版を上げるときは、`min_version`、CI の `version`、`sha256` を同時に更新する。
+`sha256` は、公式の `SHASUMS256.txt` から取る。
+`sha256` の値も、`e2e-test.yml` の値と一緒に更新する。
+`mise.toml` と `mise.lock` の差分は、コードと同じ重さでレビューする。
+
+### 設定の自動信頼の限界
+
+`jdx/mise-action` は、作業ディレクトリの mise の設定を自動で信頼する。
+PR を作った人が `mise.toml` を書き換えると、CI はその内容を実行する。
+`mise.toml` は、`[tasks]`、`[hooks]`、`[env]`、テンプレート関数で任意のコマンドを動かせるためである。
+
+守りは次の3つである。
+
+- `mise.toml` は、`min_version` と `[tools]` の `shellcheck` の1項目だけに保つ。
+- PR で `[env]`、`[tasks]`、`[hooks]` を足すと、レビューで止める。
+- CI の権限は `contents: read` だけで、利用者のシークレットは渡さない。`persist-credentials: false` を付ける。
+  ただし、`jdx/mise-action` の `github_token` の入力は、既定で `${{ github.token }}`（GitHub の自動トークン）である。
+  このため、PR の `mise.toml` のコードからは、読み取り専用で短命のトークンが見える。
+  このトークンは、`persist_github_token` が既定の `false` の間は、この action の中だけで使われる。
+
+`env: false` と `cache: false` は、取得物と環境変数の経路を減らすための設定である。
+設定の信頼の問題は解消しない。`pull_request` はフォークからの PR でも同じ経路で動く。
+この守りは、Secrets を使わず、読み取りだけの権限であることが前提である。
+次の3つも守る。
+
+- `pull_request_target` へ変えない。
+- `permissions` を広げない。
+- 差分を確かめるまで `mise trust` を実行しない。
+
+mise 本体の照合は、同じリリースの `SHASUMS256.txt` だけに頼らない。
+4 環境の値は `specs/R01-shellcheck/verification/phase-1-results.md` の 2 章に、
+導入と失敗の確認の結果は 3 章に記録している。
+
+### 修正と除外の件数
+
+件数は、設定の有無で2つの基準を分けて書く。
+
+| 基準 | m09 以外 | `tests/m09-execution-and-ci.sh` | 合計 |
+| --- | ---: | ---: | ---: |
+| 設定なし（`.shellcheckrc` が無い状態） | 44 | 112 | 156 |
+| 最終の設定（`external-sources=true`、`source-path=SCRIPTDIR`） | 43 | 112 | 155 |
+
+最終の設定では、`test-client/entrypoint.sh` の SC1091 が消える。このため、m09 以外は44件から43件になる。
+m09 の112件は、設定が変わっても変わらない。
+
+解消の内訳は、修正と除外に分けて書く。個々の行は書かない。
+
+| 対象 | 修正 | 除外 | 除外の理由（コードごと） |
+| --- | ---: | ---: | --- |
+| m09 以外（43件） | 6 | 37 | SC2034、SC2329、SC2031、SC2030、SC2086 は、別のファイルや子のシェルが使う変数と関数、サブシェルの隔離が意図の箇所。SC1090 は `source=` の宣言と、自己参照の箇所の理由付き除外。SC2016 は子の `sh` が展開する意図。SC2154 は `trap` の文字列の中で代入する変数の誤検出 |
+| m09（112件） | 1 | 111 | SC2016（39件）は、偽のコマンド本文や子のシェルの文字列。SC1090（23件）は `# shellcheck source=/dev/null` と理由。SC2031、SC2030 はサブシェルの隔離が意図。SC2329（9件）は `scripts/e2e-lib.sh` から呼ばれる関数。SC2012、SC2015 は、それぞれ1件ずつ理由を書いた。SC2086 の1件だけは修正した |
+| 合計 | 7 | 148 | 設定なしの156件から、SC1091の1件が設定で消え、155件になる |
+
+除外は指令の行で管理する。`disable` と `source=` の両方を `git grep -n 'shellcheck '` で見る。
+1つの指令が複数の指摘を覆うため、指令の行数と指摘の件数は一致しない。
+件数は `phase-2-results.md` と `phase-3-results.md` の表が正である。
+
+### 実行時間
+
+| 検査 | 実測 | 出所 |
+| --- | --- | --- |
+| 品質ゲート（`sh scripts/quality-gate.sh`） | 527秒 | フェーズ4の実測。shellcheck を追加した後の値 |
+| shellcheck（20ファイル、ローカル） | 約74秒（m09 が約53秒、残り19ファイルが約22秒） | 計画時のメインの実測（Linux aarch64、2コア） |
+| CI の `shellcheck` step | 初回 CI の実測は、利用者の端末での実行後に反映する | 未反映（T-R0145 で埋める） |
+
+CI の上限（`shellcheck` step の3分）は、ローカルの約74秒に対する余裕として決めた。
+初回 CI の実測が上限の半分を超えたら、原因を調べてから上限を見直す。
+
+### 版違いの確認（未確認）
+
+次の項目は、この環境では未確認である。利用者の端末で確かめる。
+
+| 項目 | 状態 |
+| --- | --- |
+| 版違いの失敗（期待と違う版を入れた状態で、ゲートが `FAILED:` で止まる） | 未確認。利用者の端末で確かめる |
+| macOS での mise の導入（Homebrew）と `mise install --locked` | 未確認。利用者の端末で確かめ、結果をこの節に書く |
+| `mise-action` の `install_args` が `--locked` を重複させないこと | 初回 CI の前にソースで確かめた。結果は検証の記録にある |
