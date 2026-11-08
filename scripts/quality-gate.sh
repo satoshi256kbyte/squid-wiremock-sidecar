@@ -53,14 +53,70 @@ managed_check() { # 失敗時の説明
   fi
 }
 
-# 共通ゲート: 差分、コミット済み範囲、シェル構文
+# 共通ゲート: 差分、コミット済み範囲
 run git diff --check
 run git diff --cached --check
 run git -c core.quotepath=off diff --check "$base_ref"...HEAD
-for script in tests/*.sh test-client/*.sh scripts/*.sh; do
-  [ -f "$script" ] || continue
-  run sh -n "$script"
-done
+
+# シェルの静的解析: 固定版の shellcheck を mise which の実体で動かし、対象の .sh をすべて検査する。
+# Why: PATH 上の別の shellcheck や、実行時の自動導入に頼ると、結果が環境で変わるため。
+# Why: 自動の導入を止める2つの環境変数と MISE_LOCKED=1 を、mise を呼ぶ各コマンドへ付ける。export はしない。
+# Why: mise の取得は if ! で受ける。var=$(...) で直接受けると set -e で止まり、導入手順を出せないため。
+# Why: git ls-files は一時ファイルへ書いて終了コードを見る。パイプにすると git の失敗が隠れ、空の一覧が通るため。
+shellcheck_gate() {
+  if ! command -v mise >/dev/null 2>&1; then
+    printf '%s\n' 'FAILED: miseが未導入。miseを導入し、mise install --lockedを実行する（docs/ローカル実行とCI.md）' >&2
+    status=1
+    return 0
+  fi
+  if ! expected=$(MISE_EXEC_AUTO_INSTALL=false MISE_AUTO_INSTALL=false MISE_LOCKED=1 mise current shellcheck 2>/dev/null) \
+    || [ -z "$expected" ]; then
+    printf '%s\n' 'FAILED: shellcheckの期待する版を mise current で得られない。mise install --lockedを実行する' >&2
+    status=1
+    return 0
+  fi
+  if ! actual_path=$(MISE_EXEC_AUTO_INSTALL=false MISE_AUTO_INSTALL=false MISE_LOCKED=1 mise which shellcheck 2>/dev/null) \
+    || [ -z "$actual_path" ]; then
+    printf '%s\n' 'FAILED: shellcheckが未導入。mise install --lockedを実行する' >&2
+    status=1
+    return 0
+  fi
+  if ! version_out=$("$actual_path" --version); then
+    printf '%s\n' 'FAILED: shellcheck --version が失敗した。mise install --lockedを実行する' >&2
+    status=1
+    return 0
+  fi
+  actual=$(printf '%s\n' "$version_out" | sed -n 's/^version: //p')
+  if [ "$actual" != "$expected" ]; then
+    printf 'FAILED: shellcheckの版が期待と異なる（期待 %s、実際 %s）。mise install --lockedを実行する\n' \
+      "$expected" "$actual" >&2
+    status=1
+    return 0
+  fi
+  if ! tmp_list=$(mktemp); then
+    printf '%s\n' 'FAILED: 一時ファイルを作れない' >&2
+    status=1
+    return 0
+  fi
+  trap 'rm -f "$tmp_list"' EXIT
+  # Why: 割り込みと終了要求でも、exit を経由して EXIT トラップを走らせ、一時ファイルを消すため。
+  trap 'exit 130' INT
+  trap 'exit 143' TERM
+  if ! git ls-files -z -co --exclude-standard '*.sh' >"$tmp_list"; then
+    printf '%s\n' 'FAILED: git ls-files が失敗した' >&2
+    status=1
+  elif [ ! -s "$tmp_list" ]; then
+    printf '%s\n' 'FAILED: 検査対象の .sh が0件。空の一覧は成功にしない' >&2
+    status=1
+  else
+    # Why: 先頭が - のファイル名を shellcheck にオプションとして解釈させないため、-- で区切る。
+    run xargs -0 "$actual_path" -s sh -S style -- <"$tmp_list"
+  fi
+  rm -f "$tmp_list"
+  trap - EXIT
+  trap - INT TERM
+}
+shellcheck_gate
 
 # Markdownゲート: 固定版のmarkdownlint-cli2で全Markdownを検査する。
 # 設定ファイルや依存の変更でも、規則の影響を確認するため実行する。

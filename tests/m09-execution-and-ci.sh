@@ -2665,6 +2665,24 @@ t_wf_file_exists() {
   [ -f "$WF" ]
 }
 
+# T2631: shellcheck の設定（.shellcheckrc）と mise の設定（mise.toml）を、必要な行だけに制限する。
+# Why: 設定に disable や [tasks]、[hooks]、[env] があると、検査の緩みや任意の実行を、レビューなしに持ち込めるため。
+t_shellcheck_config_and_mise_toml_are_restricted() {
+  _rc=$ROOT/.shellcheckrc
+  _mt=$ROOT/mise.toml
+  # .shellcheckrc は4行だけで、disable= を持たない。
+  must [ "$(grep -c . "$_rc" || true)" -eq 4 ]
+  must [ "$(grep -c 'disable=' "$_rc" || true)" -eq 0 ]
+  # mise.toml は min_version と [tools] の shellcheck の3行だけで、テーブルは [tools] の1つだけ。
+  must [ "$(grep -cvE '^(#|$)' "$_mt" || true)" -eq 3 ]
+  must grep -qxF 'min_version = "2026.11.3"' "$_mt"
+  must [ "$(grep -c '^\[' "$_mt" || true)" -eq 1 ]
+  must grep -qxF '[tools]' "$_mt"
+  must grep -qxF 'shellcheck = "0.11.0"' "$_mt"
+  # [env]、[hooks]、[tasks]、[plugins] は書かない。
+  must [ "$(grep -cE '^\[(env|hooks|tasks|plugins)\]' "$_mt" || true)" -eq 0 ]
+}
+
 t_wf_triggers_are_pull_request_and_main_push_only() {
   # pull_request は全ブランチ向けでフィルタ無し。push は main のみ。パスの絞り込みは無い（FR-913）。
   [ "$(wf_top_block on)" = "$(printf '  pull_request:\n  push:\n    branches: [main]')" ]
@@ -2678,8 +2696,9 @@ t_wf_job_runs_on_ubuntu_2404_with_15_minute_limit() {
   wf_has_line '    runs-on: ubuntu-24.04' && wf_has_line '    timeout-minutes: 15'
 }
 
-t_wf_step_timeouts_are_unit3_test_ci10_smoke8_contract5() {
-  [ "$(wf_step_timeout unit)" = 3 ] && [ "$(wf_step_timeout test-ci)" = 10 ] \
+t_wf_step_timeouts_are_shellcheck3_unit3_test_ci10_smoke8_contract5() {
+  [ "$(wf_step_timeout shellcheck)" = 3 ] && [ "$(wf_step_timeout unit)" = 3 ] \
+    && [ "$(wf_step_timeout test-ci)" = 10 ] \
     && [ "$(wf_step_timeout smoke)" = 8 ] && [ "$(wf_step_timeout contract)" = 5 ]
 }
 
@@ -2725,10 +2744,11 @@ t_wf_expressions_only_in_concurrency_and_artifact_name() {
   [ -z "$(grep -n '[$][{][{]' "$WF" | grep -vE 'group:|cancel-in-progress:|name: e2e-logs-' || true)" ]
 }
 
-t_wf_uses_only_checkout_and_upload_artifact() {
-  [ "$(grep -cE '^[[:space:]]*(- )?uses:' "$WF" || true)" -eq 2 ] || return 1
+t_wf_uses_checkout_mise_action_and_upload_artifact() {
+  [ "$(grep -cE '^[[:space:]]*(- )?uses:' "$WF" || true)" -eq 3 ] || return 1
   # Why: タグ（@v7）は付け替えられる。40桁のコミット SHA で固定されていることを確かめる（security-review の Low）。
   grep -qE '^      - uses: actions/checkout@[0-9a-f]{40} # v[0-9]+' "$WF" || return 1
+  grep -qE '^      - uses: jdx/mise-action@[0-9a-f]{40} # v[0-9]+' "$WF" || return 1
   grep -qE '^      - uses: actions/upload-artifact@[0-9a-f]{40} # v[0-9]+' "$WF"
 }
 
@@ -2740,12 +2760,21 @@ t_wf_steps_run_in_plan_order() {
   _got=$(grep -E '^      - (name|uses): ' "$WF" | sed -E \
     -e 's/^      - name: //' \
     -e 's#^      - uses: actions/checkout@.*#checkout#' \
+    -e 's#^      - uses: jdx/mise-action@.*#mise-action#' \
     -e 's#^      - uses: actions/upload-artifact@.*#upload-artifact#')
-  _want=$(printf 'checkout\nunit\ntest-ci\nsmoke\ncontract\ncollect\nupload-artifact\nstop')
+  _want=$(printf 'checkout\nmise-action\nshellcheck\nunit\ntest-ci\nsmoke\ncontract\ncollect\nupload-artifact\nstop')
   [ "$_got" = "$_want" ]
 }
 
 t_wf_each_step_runs_its_command() {
+  # 静的解析の step は mise which の実体で、自動の導入を止める2つの環境変数を付けて、-s sh -S style で動かす。
+  _sc=$(wf_block '- name: shellcheck$' | grep '^        run: ') || return 1
+  printf '%s\n' "$_sc" | grep -Fq 'mise which shellcheck' || return 1
+  printf '%s\n' "$_sc" | grep -Fq 'MISE_EXEC_AUTO_INSTALL=false' || return 1
+  printf '%s\n' "$_sc" | grep -Fq 'MISE_AUTO_INSTALL=false' || return 1
+  printf '%s\n' "$_sc" | grep -Fq -- '-s sh -S style' || return 1
+  # mise-action の step は install_args で --locked を渡し、導入を mise.lock に従わせる。
+  wf_block 'uses: jdx/mise-action@' | grep -qE '^          install_args: .*--locked' || return 1
   wf_block '- name: unit$' | grep -qxF '        run: sh tests/m09-execution-and-ci.sh unit' || return 1
   wf_block '- name: test-ci$' | grep -qxF '        run: npm run test:ci && sh scripts/e2e.sh test:ci normal error-500-then-200 ratelimit-429 slow-5000' || return 1
   wf_block '- name: smoke$' | grep -qxF '        run: sh tests/m09-execution-and-ci.sh smoke' || return 1
@@ -2760,7 +2789,7 @@ t_ci_test_ci_scenarios() {
   # 既存の test:ci が先、4シナリオの test:ci が後。失敗したら後は動かない（&&）。
   printf '%s\n' "$_b" | grep -qxF '        run: npm run test:ci && sh scripts/e2e.sh test:ci normal error-500-then-200 ratelimit-429 slow-5000' || return 1
   # 専用の step を増やしていないこと。名前付きの step は計画どおり6件（checkout と upload は uses で数えない）。
-  [ "$(grep -cE '^      - name: ' "$WF")" -eq 6 ] || return 1
+  [ "$(grep -cE '^      - name: ' "$WF")" -eq 7 ] || return 1
   # job 名と required status check の名前（e2e、既存の step 名）は変わらない。
   wf_has_line '  e2e:' && wf_has_line '      - name: smoke' && wf_has_line '      - name: contract'
 }
@@ -2780,7 +2809,7 @@ job = d["jobs"]["e2e"]
 names = [s.get("name") or s.get("uses", "") for s in job["steps"]]
 ok = job["runs-on"] == "ubuntu-24.04" and job["timeout-minutes"] == 15 \
     and d["permissions"] == {"contents": "read"} and "pull_request" in on \
-    and on.get("push") == {"branches": ["main"]} and len(names) == 8
+    and on.get("push") == {"branches": ["main"]} and len(names) == 10
 sys.exit(0 if ok else 1)
 ' "$WF"
 }
@@ -2925,6 +2954,33 @@ gate_m09_block() {
   _gif=$(grep -n "^if has_match '.*scripts/e2e" "$_gf" | cut -d: -f1)
   [ -n "$_gif" ] || return 1
   awk -v s="$_gif" 'NR >= s { print } NR > s && /^fi$/ { exit }' "$_gf"
+}
+
+# T2631: 品質ゲートの shellcheck は、mise which の実体を、版を比べて、自動の導入を止めて実行する。
+# Why: PATH 上の別の shellcheck や、mise exec による導入に頼ると、ゲートの結果が環境で変わるため。
+t_gate_runs_shellcheck_with_pinned_options() {
+  _gf=$ROOT/scripts/quality-gate.sh
+  _which=$(grep 'mise which shellcheck' "$_gf" || true)
+  must [ -n "$_which" ]
+  printf '%s\n' "$_which" | grep -Fq 'MISE_EXEC_AUTO_INSTALL=false' || return 1
+  printf '%s\n' "$_which" | grep -Fq 'MISE_AUTO_INSTALL=false' || return 1
+  printf '%s\n' "$_which" | grep -Fq 'MISE_LOCKED=1' || return 1
+  grep -Fq -- '--version' "$_gf" || return 1
+  grep -Fq -- '-s sh -S style' "$_gf" || return 1
+  # mise current も、同じ3つの環境変数で自動導入を止めて呼ぶ。
+  _cur=$(grep -F 'mise current shellcheck' "$_gf" || true)
+  must [ -n "$_cur" ]
+  printf '%s\n' "$_cur" | grep -Fq 'MISE_EXEC_AUTO_INSTALL=false' || return 1
+  printf '%s\n' "$_cur" | grep -Fq 'MISE_AUTO_INSTALL=false' || return 1
+  printf '%s\n' "$_cur" | grep -Fq 'MISE_LOCKED=1' || return 1
+  # 自動導入の停止と版の不一致の各ガードは、FAILED: の文言を持つ。
+  [ "$(grep -c 'FAILED:' "$_gf" || true)" -ge 2 ] || return 1
+  # 検査対象は、ファイルの一覧を NUL 区切りで xargs に渡す。
+  # shellcheck disable=SC2016 # 単一引用符の中の $actual_path は、検査対象のファイルの文字列として一致させる。展開させない意図。
+  grep -Fq -- 'xargs -0 "$actual_path"' "$_gf" || return 1
+  # sh -n の loop は shellcheck に置き換えたため残さない。mise exec は使わない。
+  [ "$(grep -cF 'sh -n' "$_gf" || true)" -eq 0 ] || return 1
+  [ "$(grep -cF 'mise exec' "$_gf" || true)" -eq 0 ]
 }
 
 t_gate_m09_block_exists_and_is_closed() {
@@ -3151,8 +3207,25 @@ t_check_ports_free() {
 
 # T2602: Client の環境変数、WireMock の path 件数、Squid のログ検査。
 # Why: 偽の docker と curl を、検査専用の一時ディレクトリだけに置き、実の Docker と WireMock に触れないようにする。
+# 偽の経路の置き場に、危ない命令の保護用の偽物を置く。PATH の後ろにある実環境の同名の命令へ届かないようにする。
+# Why: PATH="$_bin:$PATH" のままだと、偽物が無い命令は実環境の docker、curl、aws、ssh へ届くため。
+# 偽物は、この後で各ヘルパーが同じ名前で上書きする。
+t2602_guard_bin() { # 置き場
+  mkdir -p "$1"
+  for _n in docker docker-compose curl aws ssh; do
+    cat >"$1/$_n" <<'EOF'
+#!/bin/sh
+# このテストに無い命令が呼ばれたら止める。終了コード97で、実環境の同名の命令は動かさない。
+printf 'blocked by test: %s %s\n' "$0" "$*" >&2
+exit 97
+EOF
+    chmod +x "$1/$_n"
+  done
+}
+
 t2602_fake_docker() { # 置き場
   mkdir -p "$1"
+  t2602_guard_bin "$1"
   cat >"$1/docker" <<'EOF'
 #!/bin/sh
 # 呼ばれた引数を1行1要素で記録する。Why: 空白や引用符を含む値が、分かれずに1要素で届いたかを見るため。
@@ -3176,6 +3249,7 @@ EOF
 
 t2602_fake_curl() { # 置き場
   mkdir -p "$1"
+  t2602_guard_bin "$1"
   cat >"$1/curl" <<'EOF'
 #!/bin/sh
 # 応答ファイルの中身を返す。SWSC_FAKE_CURL_FAIL があれば、接続失敗と同じ終了コードで止まる。
@@ -3777,7 +3851,7 @@ run_unit() {
   check 'トリガーは pull_request（全ブランチ）と、main への push だけ' t_wf_triggers_are_pull_request_and_main_push_only
   check 'permissions は contents: read だけ' t_wf_permissions_are_contents_read_only
   check 'ジョブは ubuntu-24.04 で、timeout-minutes は15' t_wf_job_runs_on_ubuntu_2404_with_15_minute_limit
-  check 'ステップの timeout は unit 3、test-ci 10、smoke 8、contract 5' t_wf_step_timeouts_are_unit3_test_ci10_smoke8_contract5
+  check 'ステップの timeout は shellcheck 3、unit 3、test-ci 10、smoke 8、contract 5' t_wf_step_timeouts_are_shellcheck3_unit3_test_ci10_smoke8_contract5
   check 'ダミー認証情報は workflow の env だけに、値 test で書く' t_wf_dummy_credentials_are_workflow_env_only
   check 'concurrency は PR で ref、それ以外で SHA を使い、PR だけ取り消す' t_wf_concurrency_groups_pr_by_ref_and_pushes_by_sha
   check 'collect と stop は always、upload は failure で動く' t_wf_collect_always_upload_on_failure_stop_always
@@ -3785,11 +3859,12 @@ run_unit() {
   check 'Secrets の文脈を読まない' t_wf_never_reads_secrets_context
   check 'run: に式と複数行の記法を書かない' t_wf_run_lines_have_no_expression_or_block_scalar
   check '式は concurrency と アーティファクト名の中だけ' t_wf_expressions_only_in_concurrency_and_artifact_name
-  check 'uses は checkout と upload-artifact の2つだけで、コミットSHAで固定する' t_wf_uses_only_checkout_and_upload_artifact
+  check 'uses は checkout と mise-action と upload-artifact の3つだけで、コミットSHAで固定する' t_wf_uses_checkout_mise_action_and_upload_artifact
   check 'checkout は認証情報を保存しない' t_wf_checkout_does_not_persist_credentials
-  check 'ステップの順序は checkout、unit、test-ci、smoke、contract、collect、upload、stop' t_wf_steps_run_in_plan_order
+  check 'ステップの順序は checkout、mise-action、shellcheck、unit、test-ci、smoke、contract、collect、upload、stop' t_wf_steps_run_in_plan_order
   check '各ステップは計画どおりの入口を1つだけ呼ぶ' t_wf_each_step_runs_its_command
   check 'docker compose と docker-compose を呼ばない' t_wf_has_no_docker_compose_call
+  check 'shellcheck の設定と mise.toml は必要な行だけを持つ（disable、[tasks]、[hooks]、[env] なし）' t_shellcheck_config_and_mise_toml_are_restricted
   check 'test-ci の検査列に M08 の4シナリオが直列で入り、専用の step は増えない' t_ci_test_ci_scenarios
   if python3 -c 'import yaml' >/dev/null 2>&1; then
     check 'workflow は YAML として読め、形が一致する' t_wf_yaml_parses_with_expected_shape
@@ -3824,6 +3899,7 @@ run_unit() {
   check 'M02 はゲートの対象で、稼働中のスタックを前提とする NOTE が無い' t_gate_m02_runs_in_gate_without_stack_note
   check 'ゲートは Compose の呼び出しと、|| true で包んだ Docker の呼び出しを持たない' t_gate_no_compose_calls_or_or_true_wrapped_docker
   check 'ゲートは S14 の unit と管理対象の残存検査（swsc_check_managed_empty）を実行する' t_gate_runs_s14_contract_unit_and_managed_check_for_squid_block
+  check 'ゲートの shellcheck は mise which の実体を、版を比べ、自動導入を止めて実行し、sh -n と mise exec を持たない' t_gate_runs_shellcheck_with_pinned_options
   check 'Docker の失敗は管理対象の残存検査で status=1 になる（ゲートの定義から取り出して確かめる）' t_managed_resource_check_failure
   check '管理対象の残存が無ければ、ゲートの残存検査は status=0 のまま' t_managed_resource_check_passes_when_empty_in_gate
   printf '== T2601 ロックとポート確認\n'
