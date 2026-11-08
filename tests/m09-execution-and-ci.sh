@@ -2710,9 +2710,9 @@ t_wf_job_runs_on_ubuntu_2404_with_15_minute_limit() {
   "$_y" -e '.jobs.e2e."runs-on" == "ubuntu-24.04" and .jobs.e2e."timeout-minutes" == 15' "$WF" >/dev/null
 }
 
-t_wf_step_timeouts_are_shellcheck3_actionlint2_unit3_test_ci10_smoke8_contract5() {
+t_wf_step_timeouts_are_shellcheck3_actionlint2_gitleaks2_unit3_test_ci10_smoke8_contract5() {
   _y=$(wf_yq_bin) || return 1
-  "$_y" -e '(.jobs.e2e.steps[] | select(.name == "shellcheck") | ."timeout-minutes" == 3) and (.jobs.e2e.steps[] | select(.name == "actionlint") | ."timeout-minutes" == 2) and (.jobs.e2e.steps[] | select(.name == "unit") | ."timeout-minutes" == 3) and (.jobs.e2e.steps[] | select(.name == "test-ci") | ."timeout-minutes" == 10) and (.jobs.e2e.steps[] | select(.name == "smoke") | ."timeout-minutes" == 8) and (.jobs.e2e.steps[] | select(.name == "contract") | ."timeout-minutes" == 5)' "$WF" >/dev/null
+  "$_y" -e '(.jobs.e2e.steps[] | select(.name == "shellcheck") | ."timeout-minutes" == 3) and (.jobs.e2e.steps[] | select(.name == "actionlint") | ."timeout-minutes" == 2) and (.jobs.e2e.steps[] | select(.name == "gitleaks") | ."timeout-minutes" == 2) and (.jobs.e2e.steps[] | select(.name == "unit") | ."timeout-minutes" == 3) and (.jobs.e2e.steps[] | select(.name == "test-ci") | ."timeout-minutes" == 10) and (.jobs.e2e.steps[] | select(.name == "smoke") | ."timeout-minutes" == 8) and (.jobs.e2e.steps[] | select(.name == "contract") | ."timeout-minutes" == 5)' "$WF" >/dev/null
 }
 
 t_wf_dummy_credentials_are_workflow_env_only() {
@@ -2789,7 +2789,7 @@ t_wf_steps_run_in_plan_order() {
   # uses の step は名前の代わりに action の名前（版の @ より前）で数える。
   _y=$(wf_yq_bin) || return 1
   _got=$("$_y" -r '[.jobs.e2e.steps[] | (.name // (.uses | sub("@.*$"; "")))] | join(",")' "$WF") || return 1
-  [ "$_got" = "actions/checkout,jdx/mise-action,shellcheck,actionlint,unit,test-ci,smoke,contract,collect,actions/upload-artifact,stop" ]
+  [ "$_got" = "actions/checkout,jdx/mise-action,shellcheck,actionlint,gitleaks,unit,test-ci,smoke,contract,collect,actions/upload-artifact,stop" ]
 }
 
 t_wf_each_step_runs_its_command() {
@@ -2801,6 +2801,8 @@ t_wf_each_step_runs_its_command() {
   # shellcheck disable=SC2016 # 単一引用符の中の $( ) と " は、YAML の run: の値として文字どおり比べるための文字列。
   _al='"$(MISE_EXEC_AUTO_INSTALL=false MISE_AUTO_INSTALL=false mise which actionlint)" -shellcheck "$(MISE_EXEC_AUTO_INSTALL=false MISE_AUTO_INSTALL=false mise which shellcheck)" .github/workflows/e2e-test.yml'
   WF_RUN_AL=$_al "$_y" -e '.jobs.e2e.steps[] | select(.name == "actionlint") | .run == strenv(WF_RUN_AL)' "$WF" >/dev/null || return 1
+  # gitleaks の step は 4.3 節と同じ引数で、実体は mise which で得る。式は含めない。
+  "$_y" -e '.jobs.e2e.steps[] | select(.name == "gitleaks") | .run | (contains("mise which gitleaks") and contains("MISE_EXEC_AUTO_INSTALL=false") and contains("MISE_AUTO_INSTALL=false") and contains(" dir . ") and contains("--config .gitleaks.toml") and contains("--redact") and contains("--no-banner") and contains("--exit-code 1"))' "$WF" >/dev/null || return 1
   # mise-action の step は install_args で --locked を渡し、導入を mise.lock に従わせる。
   "$_y" -e '.jobs.e2e.steps[] | select((.uses // "") | test("^jdx/mise-action@")) | .with.install_args == "--locked"' "$WF" >/dev/null || return 1
   "$_y" -e '.jobs.e2e.steps[] | select(.name == "unit") | .run == "sh tests/m09-execution-and-ci.sh unit"' "$WF" >/dev/null || return 1
@@ -2816,8 +2818,8 @@ t_ci_test_ci_scenarios() {
   _y=$(wf_yq_bin) || return 1
   # 既存の test:ci が先、4シナリオの test:ci が後。失敗したら後は動かない（&&）。
   "$_y" -e '.jobs.e2e.steps[] | select(.name == "test-ci") | .run == "npm run test:ci && sh scripts/e2e.sh test:ci normal error-500-then-200 ratelimit-429 slow-5000"' "$WF" >/dev/null || return 1
-  # 専用の step を増やしていないこと。名前付きの step は計画どおり8件（checkout と upload は uses で数えない）。
-  "$_y" -e '([.jobs.e2e.steps[] | select(has("name"))] | length) == 8' "$WF" >/dev/null || return 1
+  # 専用の step を増やしていないこと。名前付きの step は計画どおり9件（checkout と upload は uses で数えない）。
+  "$_y" -e '([.jobs.e2e.steps[] | select(has("name"))] | length) == 9' "$WF" >/dev/null || return 1
   # job 名と required status check の名前（e2e、既存の step 名 smoke と contract）は変わらない。
   "$_y" -e '(.jobs | has("e2e")) and ([.jobs.e2e.steps[] | select(.name == "smoke" or .name == "contract")] | length) == 2' "$WF" >/dev/null
 }
@@ -2828,10 +2830,10 @@ t_wf_has_no_docker_compose_call() {
 }
 
 t_wf_yaml_parses_with_expected_shape() {
-  # YAML として読めることと、形（runner、job 名、job 全体の timeout、権限、トリガー、step 数11）を yq で確かめる。
+  # YAML として読めることと、形（runner、job 名、job 全体の timeout、権限、トリガー、step 数12）を yq で確かめる。
   # on は文字列のキーとして読まれる（yq は YAML 1.2 で on を真偽値に変えない）。
   _y=$(wf_yq_bin) || return 1
-  "$_y" -e '.jobs.e2e."runs-on" == "ubuntu-24.04" and .jobs.e2e."timeout-minutes" == 15 and (.permissions | keys | join(",")) == "contents" and .permissions.contents == "read" and (.on | has("pull_request")) and (.on.push | keys | join(",")) == "branches" and .on.push.branches[0] == "main" and (.jobs.e2e.steps | length) == 11' "$WF" >/dev/null
+  "$_y" -e '.jobs.e2e."runs-on" == "ubuntu-24.04" and .jobs.e2e."timeout-minutes" == 15 and (.permissions | keys | join(",")) == "contents" and .permissions.contents == "read" and (.on | has("pull_request")) and (.on.push | keys | join(",")) == "branches" and .on.push.branches[0] == "main" and (.jobs.e2e.steps | length) == 12' "$WF" >/dev/null
 }
 
 # 壊した定義1件を一時ファイルへ作り、対応する検査が落ちることを確かめる。
@@ -2856,7 +2858,7 @@ t_wf_broken_definitions_fail() {
   _bad=0
   wf_broken_case permissions 's/^  contents: read$/  contents: write/' t_wf_permissions_are_contents_read_only || _bad=1
   wf_broken_case timeout '/^      - name: unit$/,/timeout-minutes/{s/timeout-minutes: 3/timeout-minutes: 4/}' \
-    t_wf_step_timeouts_are_shellcheck3_actionlint2_unit3_test_ci10_smoke8_contract5 || _bad=1
+    t_wf_step_timeouts_are_shellcheck3_actionlint2_gitleaks2_unit3_test_ci10_smoke8_contract5 || _bad=1
   wf_broken_case if-always '/^      - name: collect$/,/run:/{/if: always()/d}' \
     t_wf_collect_always_upload_on_failure_stop_always || _bad=1
   wf_broken_case sha-pin 's|actions/checkout@[0-9a-f]\{40\} # v7.0.1|actions/checkout@v4|' \
@@ -2993,17 +2995,6 @@ t_doc_gate_summary_covers_g1_to_g5() {
   done
 }
 
-# S26: 旧 S14 が見ていた文書と設定（ポート公開範囲の文書、Squid の設定、ecs/）も対象にする。
-t_doc_has_no_identity_values() {
-  for _f in "$ROOT/docs/ローカル実行とCI.md" "$ROOT/README.md" "$ROOT/AGENTS.md" \
-    "$ROOT/docs/ポート公開範囲.md" "$ROOT/squid-config/squid.conf" "$ROOT/squid-config/whitelist.txt" \
-    "$ROOT/ecs/task-definition.template.json" "$ROOT/ecs/squid/Dockerfile" "$ROOT/ecs/squid/derive-config.sh" \
-    "$ROOT/ecs/squid/entrypoint.sh"; do
-    [ -f "$_f" ] || return 1
-    ! grep -Eq '[0-9]{12}|arn:aws|AKIA' "$_f" || return 1
-  done
-}
-
 t_doc_readme_links_and_lists_npm_run() {
   _readme="$ROOT/README.md"
   grep -Fq '(docs/ローカル実行とCI.md)' "$_readme" || return 1
@@ -3094,6 +3085,7 @@ t_gate_runs_pinned_tools() {
   # コメントを除き、行頭の呼び出しとして探す（コメントや文字列の中の一致で通さない）。
   gate_sources | grep -vE '^[[:space:]]*#' | grep -Fq 'resolve_tool actionlint ' || return 1
   gate_sources | grep -vE '^[[:space:]]*#' | grep -Fq 'resolve_tool yq ' || return 1
+  gate_sources | grep -vE '^[[:space:]]*#' | grep -Fq 'resolve_tool gitleaks ' || return 1
   # mise which と mise current を呼ぶ行は、共通の関数のファイルにある。コメントを除き、3つの環境変数を必ず付ける。
   _calls=$(cat "$ROOT/scripts/lib/resolve-tool.sh" | grep -E 'mise (which|current) ' | grep -vE '^[[:space:]]*#' || true)
   must [ -n "$_calls" ]
@@ -3103,6 +3095,132 @@ t_gate_runs_pinned_tools() {
   # mise exec と || true は、コメントを除いて書かない。
   [ "$(gate_sources | grep -vE '^[[:space:]]*#' | grep -cF 'mise exec' || true)" -eq 0 ] || return 1
   [ "$(gate_sources | grep -vE '^[[:space:]]*#' | grep -cF '|| true' || true)" -eq 0 ]
+}
+
+# T-R0235: .gitleaks.toml は独自の規則だけを持ち、既定の規則の読み込み（useDefault）、
+# トップレベルの [allowlist]、stopwords を書かない。コメントの中の語は対象外。
+# Why: 既定の規則や全体の除外は、置き換え前の検査の範囲を黙って狭めるため（clarify.md 7章）。
+t_gitleaks_config_has_no_global_allowlist() {
+  _cfg=$ROOT/.gitleaks.toml
+  [ -f "$_cfg" ] || return 1
+  _code=$(sed '/^[[:space:]]*#/d' "$_cfg") || return 1
+  printf '%s\n' "$_code" | grep -q 'useDefault' && return 1
+  printf '%s\n' "$_code" | grep -qE '^[[:space:]]*\[allowlist\][[:space:]]*$' && return 1
+  printf '%s\n' "$_code" | grep -q 'stopwords' && return 1
+  # 作業ツリーの .gitleaksignore は、リポジトリ直下に置かない（cd の後で確かめる）。
+  ( cd "$ROOT" && [ ! -e .gitleaksignore ] ) || return 1
+  # 追跡対象と作業ツリーのスクリプト・テスト・ワークフロー・設定に、除外の印が無いこと。
+  # 印の文字列は組み立てて持つ。この検査のファイル自身に一致させないため。文書は対象外。
+  _tok=$(printf '%s:%s' 'gitleaks' 'allow')
+  _hits=$(cd "$ROOT" && git grep -l -F "$_tok" -- scripts tests .github .gitleaks.toml) ; _rc=$?
+  [ "$_rc" -eq 1 ] || return 1
+  return 0
+}
+
+# gitleaks dir を1つのディレクトリに走らせ、終了コードを標準出力へ出す。出力は指定のファイルへ書く。
+gl_scan_rc() { # 実体 設定 走査するディレクトリ 出力先
+  _rc=0
+  "$1" dir "$3" --config "$2" --redact --no-banner --exit-code 1 >"$4" 2>&1 || _rc=$?
+  printf '%s\n' "$_rc"
+}
+
+# 値の検出を確かめる。終了コードが0なら失敗、出力に値が出ていれば失敗（値を出さないことの確認）。
+gl_expect_detect() { # 実体 設定 走査先 出力先 値
+  _rc=$(gl_scan_rc "$1" "$2" "$3" "$4")
+  [ "$_rc" -ne 0 ] || return 1
+  grep -qF -- "$5" "$4" && return 1
+  return 0
+}
+
+# 値の形に合わない語だけのファイルは、終了コードが0になることを確かめる。
+gl_expect_clean() { # 実体 設定 走査先 出力先
+  _rc=$(gl_scan_rc "$1" "$2" "$3" "$4")
+  [ "$_rc" -eq 0 ]
+}
+
+# 検査が作った一時ディレクトリを消す。中のファイルを1つずつ rm -f し、ディレクトリを深い順に rmdir する。
+# 作業ディレクトリの名前が gitleaks- で始まらないときは、何も消さずに失敗する（別の場所を消さないため）。
+gl_cleanup() { # 作業ディレクトリ
+  case "$(basename "$1")" in gitleaks-*) ;; *) return 1 ;; esac
+  [ -d "$1" ] || return 1
+  _cr=0
+  find "$1" -type f -exec rm -f {} \; || _cr=1
+  find "$1" -depth -type d -exec rmdir {} \; || _cr=1
+  return "$_cr"
+}
+
+# T-R0347: gitleaks の段2（値の形に絞った3規則）が、実行時に組み立てた値を検出し、値を出力しないことを確かめる。
+# Why: 規則が効かなくなると、識別情報を含む変更が品質ゲートを通ってしまうため。
+# 値は printf の引数で連結して作り、ファイルに固定の値として書かない（NFR-R0206）。
+# 段1（path に限る規則）は、一時ディレクトリの相対パスに当たるかが未確認のため、この検査の対象にしない。段1は手動確認（T-R0343、T-R0246）に残す。
+t_gitleaks_rules_detect_runtime_built_values() {
+  _gl=$(cd "$ROOT" && MISE_EXEC_AUTO_INSTALL=false MISE_AUTO_INSTALL=false MISE_LOCKED=1 mise which gitleaks 2>/dev/null) || return 1
+  [ -x "$_gl" ] || return 1
+  _cfg=$ROOT/.gitleaks.toml
+  _base=${KIROCREW_SCRATCH:-${TMPDIR:-/tmp}}
+  mkdir -p "$_base" || return 1
+  _d=$(mktemp -d "$_base/gitleaks-rules.XXXXXX") || return 1
+  _bad=0
+  # ここから先は、途中で失敗しても作業ディレクトリを gl_cleanup で消す（return で抜けない）。
+  # 実行時に組み立てた値。実在しない形の値だけを使う。
+  _v12=$(printf '%s%s%s' '1234' '5678' '9012')
+  _arn=$(printf '%s:%s:%s::%s:role/%s' 'arn' 'aws' 'iam' "$_v12" 'TestRole')
+  _key=$(printf '%s%s%s' 'AK' 'IA' 'ABCDEFGHIJKLMNOP')
+  for _k in num arn key clean; do mkdir -p "$_d/$_k" || _bad=1; done
+  # 段2のアカウントIDの規則は、account や aws などの語が近くにある12桁を検出する（8.1節）。語を添える。
+  printf '%s %s\n' 'account' "$_v12" >"$_d/num/value.txt" || _bad=1
+  printf '%s\n' "$_arn" >"$_d/arn/value.txt" || _bad=1
+  printf '%s\n' "$_key" >"$_d/key/value.txt" || _bad=1
+  printf '%s\n' 'the quick brown fox, review notes only' >"$_d/clean/value.txt" || _bad=1
+  gl_expect_detect "$_gl" "$_cfg" "$_d/num" "$_d/num.out" "$_v12" || _bad=1
+  gl_expect_detect "$_gl" "$_cfg" "$_d/arn" "$_d/arn.out" "$_arn" || _bad=1
+  gl_expect_detect "$_gl" "$_cfg" "$_d/key" "$_d/key.out" "$_key" || _bad=1
+  gl_expect_clean "$_gl" "$_cfg" "$_d/clean" "$_d/clean.out" || _bad=1
+  gl_cleanup "$_d" || _bad=1
+  [ "$_bad" -eq 0 ]
+}
+
+# T-R0348: 段1の path 規則が、FR-R0210 の11ファイルに12桁の番号を検出し、対象外のパスには検出しないことを確かめる。
+# Why: path 規則の範囲が狭まると、置き換え前の検査の範囲を黙って失うため（FR-R0210）。
+# gitleaks は絶対パスで File を書くため、一時ディレクトリの中へ移り、相対パスで走査する。
+# 値は printf で組み立て、ファイルに固定で書かない（NFR-R0206）。検出の出力は JSON で読み、値を表示しない。
+t_gitleaks_path_rules_cover_eleven_files() {
+  _gl=$(cd "$ROOT" && MISE_EXEC_AUTO_INSTALL=false MISE_AUTO_INSTALL=false MISE_LOCKED=1 mise which gitleaks 2>/dev/null) || return 1
+  [ -x "$_gl" ] || return 1
+  _jq=$(cd "$ROOT" && MISE_EXEC_AUTO_INSTALL=false MISE_AUTO_INSTALL=false MISE_LOCKED=1 mise which jq 2>/dev/null) || return 1
+  [ -x "$_jq" ] || return 1
+  _cfg=$ROOT/.gitleaks.toml
+  _base=${KIROCREW_SCRATCH:-${TMPDIR:-/tmp}}
+  mkdir -p "$_base" || return 1
+  _d=$(mktemp -d "$_base/gitleaks-path.XXXXXX") || return 1
+  # 報告は作業ディレクトリの中に置く。gitleaks は走査の後に報告を書くため、報告自身は走査されない。
+  _json=$_d/r.json
+  _v=$(printf '%s%s%s' '1234' '5678' '9012')
+  _bad=0
+  _targets='docs/ローカル実行とCI.md README.md AGENTS.md docs/ポート公開範囲.md squid-config/squid.conf squid-config/whitelist.txt ecs/task-definition.template.json ecs/squid/Dockerfile ecs/squid/derive-config.sh ecs/squid/entrypoint.sh docs/E2Eテスト.md'
+  _other='other/a.txt'
+  for _rel in $_targets $_other; do
+    mkdir -p "$_d/$(dirname "$_rel")" || _bad=1
+    printf '%s\n' "$_v" >"$_d/$_rel" || _bad=1
+  done
+  ( cd "$_d" && "$_gl" dir . --config "$_cfg" --redact --no-banner --exit-code 0 --report-format json --report-path "$_json" ) >/dev/null 2>&1 || _bad=1
+  _hits=$("$_jq" -r '.[]? | .RuleID + " " + .File' "$_json") || _bad=1
+  for _rel in $_targets; do
+    if printf '%s\n' "$_hits" | grep -qxF "identity-doc-12digit $_rel"; then :; else _bad=1; fi
+  done
+  if printf '%s\n' "$_hits" | grep -qF " $_other"; then _bad=1; fi
+  gl_cleanup "$_d" || _bad=1
+  [ "$_bad" -eq 0 ]
+}
+
+# 段1の3規則（identity-doc の id を持つ規則）の path は、3つとも同じ文字列であることを確かめる。
+# Why: 3規則の path がずれると、一部の規則だけ対象のファイルが狭まり、検出の範囲を黙って失うため。
+t_gitleaks_stage1_paths_are_identical() {
+  _cfg=$ROOT/.gitleaks.toml
+  [ -f "$_cfg" ] || return 1
+  _paths=$(awk '/^\[\[rules\]\]/ { on = 0 } /^id = "identity-doc-/ { on = 1 } on && /^path = / { print }' "$_cfg") || return 1
+  [ "$(printf '%s\n' "$_paths" | grep -c '^path = ' || true)" -eq 3 ] || return 1
+  [ "$(printf '%s\n' "$_paths" | sort -u | grep -c . || true)" -eq 1 ]
 }
 
 t_gate_m09_block_exists_and_is_closed() {
@@ -3973,7 +4091,7 @@ run_unit() {
   check 'トリガーは pull_request（全ブランチ）と、main への push だけ' t_wf_triggers_are_pull_request_and_main_push_only
   check 'permissions は contents: read だけ' t_wf_permissions_are_contents_read_only
   check 'ジョブは ubuntu-24.04 で、timeout-minutes は15' t_wf_job_runs_on_ubuntu_2404_with_15_minute_limit
-  check 'ステップの timeout は shellcheck 3、actionlint 2、unit 3、test-ci 10、smoke 8、contract 5' t_wf_step_timeouts_are_shellcheck3_actionlint2_unit3_test_ci10_smoke8_contract5
+  check 'ステップの timeout は shellcheck 3、actionlint 2、gitleaks 2、unit 3、test-ci 10、smoke 8、contract 5' t_wf_step_timeouts_are_shellcheck3_actionlint2_gitleaks2_unit3_test_ci10_smoke8_contract5
   check 'ダミー認証情報は workflow の env だけに、値 test で書く' t_wf_dummy_credentials_are_workflow_env_only
   check 'concurrency は PR で ref、それ以外で SHA を使い、PR だけ取り消す' t_wf_concurrency_groups_pr_by_ref_and_pushes_by_sha
   check 'collect と stop は always、upload は failure で動く' t_wf_collect_always_upload_on_failure_stop_always
@@ -3983,10 +4101,14 @@ run_unit() {
   check '式は concurrency と アーティファクト名の中だけ' t_wf_expressions_only_in_concurrency_and_artifact_name
   check 'uses は checkout と mise-action と upload-artifact の3つだけで、コミットSHAで固定する' t_wf_uses_checkout_mise_action_and_upload_artifact
   check 'checkout は認証情報を保存しない' t_wf_checkout_does_not_persist_credentials
-  check 'ステップの順序は checkout、mise-action、shellcheck、actionlint、unit、test-ci、smoke、contract、collect、upload、stop' t_wf_steps_run_in_plan_order
+  check 'ステップの順序は checkout、mise-action、shellcheck、actionlint、gitleaks、unit、test-ci、smoke、contract、collect、upload、stop' t_wf_steps_run_in_plan_order
   check '各ステップは計画どおりの入口を1つだけ呼ぶ' t_wf_each_step_runs_its_command
   check 'docker compose と docker-compose を呼ばない' t_wf_has_no_docker_compose_call
-  check '品質ゲートは actionlint と yq を mise which で得て、3つの環境変数を付け、mise exec と || true を使わない' t_gate_runs_pinned_tools
+  check '品質ゲートは actionlint、gitleaks、yq を mise which で得て、3つの環境変数を付け、mise exec と || true を使わない' t_gate_runs_pinned_tools
+  check '.gitleaks.toml は useDefault、トップレベルの [allowlist]、stopwords を持たない' t_gitleaks_config_has_no_global_allowlist
+  check 'gitleaks の段2の3規則は実行時に組み立てた値を検出し、値を出さない' t_gitleaks_rules_detect_runtime_built_values
+  check 'gitleaks の段1の path 規則は FR-R0210 の11ファイルに当たり、対象外のパスには当たらない' t_gitleaks_path_rules_cover_eleven_files
+  check 'gitleaks の段1の3規則の path は同じ文字列である' t_gitleaks_stage1_paths_are_identical
   check 'shellcheck の設定と mise.toml は必要な行だけを持つ（disable、[tasks]、[hooks]、[env] なし）' t_shellcheck_config_and_mise_toml_are_restricted
   check 'mise.toml は min_version と [tools] の6ツールだけを持つ（[tasks]、[hooks]、[env]、[plugins] なし）' t_mise_toml_is_restricted
   check 'test-ci の検査列に M08 の4シナリオが直列で入り、専用の step は増えない' t_ci_test_ci_scenarios
@@ -4004,7 +4126,6 @@ run_unit() {
   check '文書の停止は docker rm -f で、SIGTERM の制約を書く' t_doc_stop_uses_rm_f_and_states_sigterm
   check '文書の所要時間は CI の初回実行の実測値と上限の根拠を書く' t_doc_duration_defers_to_ci
   check '文書のゲートの結果は G1 から G5 を含む' t_doc_gate_summary_covers_g1_to_g5
-  check '文書、README、AGENTS.md に識別情報（12桁の数字、arn:aws、AKIA）が無い' t_doc_has_no_identity_values
   check 'README は文書へのリンクと npm run の6操作を載せる' t_doc_readme_links_and_lists_npm_run
   check 'README に旧 Compose 手順が無く、docker-compose.yml も無い' t_doc_readme_has_no_old_compose_procedure
   check 'AGENTS.md の品質ゲート表に M09 の行があり、unit と smoke を登録し contract は登録しないと書く' t_doc_agents_row_registers_unit_smoke_not_contract

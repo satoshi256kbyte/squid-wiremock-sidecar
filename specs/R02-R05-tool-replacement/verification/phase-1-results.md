@@ -7,7 +7,7 @@
 
 | 項目 | 結果 |
 | --- | --- |
-| U11: actionlint の引数の渡し方 | `actionlint <ファイル>` は、現在のワークフローを終了コード 0 で通す。`actionlint -shellcheck <shellcheck の実体> <ファイル>` も終了コード 0 で通す。`run:` の形は、1行の単一引用符の値とする（`run: |` の形は、検査 `t_wf_run_lines_have_no_expression_or_block_scalar` が拒否する） |
+| U11: actionlint の引数の渡し方 | `actionlint <ファイル>` は、現在のワークフローを終了コード 0 で通す。`actionlint -shellcheck <shellcheck の実体> <ファイル>` も終了コード 0 で通す。`run:` の形は、1行の単一引用符の値とする（`run: \|` の形は、検査 `t_wf_run_lines_have_no_expression_or_block_scalar` が拒否する） |
 | 式の誤りの検出 | 存在しないコンテキストの式を含む一時のワークフローで、actionlint は終了コード 1 で失敗する（検査 `t_actionlint_rejects_expression_error`） |
 | 旧の18関数の複製 | **未実施**。置き換えの前に旧の M09 を複製し、旧の判定を記録する作業は、実施していない。旧の判定は、置き換え後の検査が、壊した定義を落とすことで代替して確かめた（第3章） |
 
@@ -26,7 +26,7 @@
 | --- | --- |
 | 旧の補助関数（`wf_block`、`wf_has_line`、`wf_top_block`、`wf_step_timeout`） | 削除済み。`git grep` で定義と使用は0件（`t_wf_step_timeouts_...` の名前の中の部分一致は除く） |
 | PyYAML の分岐（`import yaml`、SKIP の表示） | 削除済み |
-| 契約の検査 | `yq -e` の式で構造比較する。`null` と `false` は失敗。map の比較は `keys | join` で行う |
+| 契約の検査 | `yq -e` の式で構造比較する。`null` と `false` は失敗。map の比較は `keys \| join` で行う |
 | 壊した定義の確認 | Haiku が、`yq` の式で、壊した定義（`persist-credentials: true`、`smoke` の中の `docker compose`、`retention-days: 30`、`smoke` の改名）を作り、対応する検査が落ちることを確かめた |
 | 未実施の確認 | 旧の検査と新の式の、1件ずつの対応表（T-R0228）は作っていない。壊した定義の10件（plan 7.4 節）の全件は確かめていない |
 

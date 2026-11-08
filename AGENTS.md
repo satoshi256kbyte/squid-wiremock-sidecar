@@ -42,6 +42,9 @@ actionlint、gitleaks、bats、jq、yq の各ゲートは、そのツールを�
 | AWS CDK、Ministack | 構成を追加した場合のみ、対応するsynth・構成検査を実行する |
 | ECS タスク定義方式のE2E基盤（`scripts/e2e*.sh`、`ecs/`、`tests/m09-execution-and-ci.sh`） | 上記、`shellcheck`、`python3 -B -m py_compile scripts/e2e-taskdef.py`、`sh tests/m09-execution-and-ci.sh unit`と`smoke`。`contract`は利用者の端末とCIだけで実行し、品質ゲートに登録しない |
 | すべての変更（毎回実行） | `actionlint`（`.github/workflows/`の全ワークフローを検査する。mise が必要。未導入と版違いは `FAILED:` と導入手順を出して失敗する） |
+| すべての変更（毎回実行） | `gitleaks`（作業ツリーを `dir` で走査し、`--redact` で検出した値を出さない。mise が必要。未導入と版違いは `FAILED:` と導入手順を出して失敗する） |
+
+旧の grep による識別情報の検査は削除済みで、識別情報の検査は gitleaks（`.gitleaks.toml` の規則）が担う。
 
 M09 の契約の検査は、ワークフローの YAML を `yq -e` で構造比較する。PyYAML は使わない。
 `yq` の版は、Markdown のゲートの前に、固定版と照合する。
@@ -74,7 +77,7 @@ Colimaを使用している場合だけ、次の条件付き設定を使用す�
 
 ```bash
 if command -v colima >/dev/null 2>&1 && colima status >/dev/null 2>&1; then
-  export DOCKER_HOST=unix:///Users/satoshi/.colima/default/docker.sock
+  export DOCKER_HOST=unix://$HOME/.colima/default/docker.sock
 fi
 ```
 

@@ -46,6 +46,10 @@ jobs:
       - name: actionlint
         run: '"$(MISE_EXEC_AUTO_INSTALL=false MISE_AUTO_INSTALL=false mise which actionlint)" -shellcheck "$(MISE_EXEC_AUTO_INSTALL=false MISE_AUTO_INSTALL=false mise which shellcheck)" .github/workflows/e2e-test.yml'
         timeout-minutes: 2
+      # Why: gitleaks は mise の固定版を使う。作業ツリーを dir で走査し、--redact で検出した値を出さない（FR-R0237）。
+      - name: gitleaks
+        run: '"$(MISE_EXEC_AUTO_INSTALL=false MISE_AUTO_INSTALL=false mise which gitleaks)" dir . --config .gitleaks.toml --redact --no-banner --exit-code 1'
+        timeout-minutes: 2
       # Why: ローカルと同じく、unit を test:ci より先に置く。unit が落ちたら Docker は動かさない（FR-914）。
       - name: unit
         run: sh tests/m09-execution-and-ci.sh unit

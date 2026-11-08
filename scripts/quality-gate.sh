@@ -18,7 +18,7 @@ if ! git rev-parse --verify -q "$base_ref" >/dev/null 2>&1; then
 fi
 
 if command -v colima >/dev/null 2>&1 && colima status >/dev/null 2>&1; then
-  export DOCKER_HOST=unix:///Users/satoshi/.colima/default/docker.sock
+  export DOCKER_HOST=unix://"$HOME"/.colima/default/docker.sock
 fi
 
 # core.quotepathをオフにし、日本語のパスを引用符なしで扱う。
@@ -132,6 +132,25 @@ actionlint_gate() {
   trap - INT TERM
 }
 actionlint_gate
+
+# gitleaks: 固定版の gitleaks で作業ツリーを走査し、識別情報の形を検出する。
+# Why: dir で作業ツリーを読む。履歴の走査（git サブコマンド）は使わない（plan 7.2）。
+# Why: --redact で検出した値を出さない（FR-R0213）。終了コードは run で受けて status へ反映し、|| true で握りつぶさない。
+# Why: 版の取り出しは、出力の先頭の語を除いた版の部分だけを残す。gitleaks version の出力の形（8.30.1）に合わせる。
+gitleaks_gate() {
+  if ! resolve_tool gitleaks 's/^[^0-9]*//p' version; then
+    status=1
+    return 0
+  fi
+  gitleaks_path=$RESOLVED_PATH
+  if [ ! -f .gitleaks.toml ]; then
+    printf '%s\n' 'FAILED: .gitleaks.toml が無い。規則の設定を確かめる' >&2
+    status=1
+    return 0
+  fi
+  run "$gitleaks_path" dir . --config .gitleaks.toml --redact --no-banner --exit-code 1
+}
+gitleaks_gate
 
 # yq は使う側の検査（M09 の構造比較）より前に、版の照合だけを先頭で行う。
 # Why: 版違いや未導入を、後段の失敗より前に導入手順つきで示すため。

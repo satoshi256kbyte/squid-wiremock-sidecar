@@ -1,0 +1,50 @@
+# gitleaks の設定。既定の規則は使わず、このリポジトリの独自の規則だけを置く。
+# 既定の規則を継承する設定は書かず、全体に効く許可の一覧と語の除外の一覧も置かない（clarify.md 7章）。
+# 規則は2段にする（plan.md 8.1）。
+# 段1: 置き換え前の11ファイル（spec.md FR-R0210）に path で限り、置き換え前の grep -E と同じ文字列で検出する。
+# 段2: path を指定せず、値の形に絞った規則で追跡対象の全体を検出する（FR-R0236）。
+# この設定には、識別情報の値そのものを書かない（NFR-R0206）。検出の出力は --redact で値を隠す（FR-R0213）。
+title = "squid-wiremock-sidecar の識別情報の検査"
+
+# 段1 の対象ファイル。置き換え前の検査（m09 の t_doc_has_no_identity_values、m08 の unit_doc）と同じ範囲。
+# 文字列の末尾を $ で止め、パスの接尾辞だけが一致しないようにする。この設定自身は含まない。
+
+[[rules]]
+id = "identity-doc-12digit"
+description = "置き換え前の t_doc_has_no_identity_values（m09）と unit_doc（m08）の 12桁の数字の検査（段1）"
+path = '''^(?:docs/ローカル実行とCI\.md|README\.md|AGENTS\.md|docs/ポート公開範囲\.md|squid-config/squid\.conf|squid-config/whitelist\.txt|ecs/task-definition\.template\.json|ecs/squid/Dockerfile|ecs/squid/derive-config\.sh|ecs/squid/entrypoint\.sh|docs/E2Eテスト\.md)$'''
+regex = '''[0-9]{12}'''
+
+[[rules]]
+id = "identity-doc-arn"
+description = "置き換え前の t_doc_has_no_identity_values（m09）と unit_doc（m08）の arn:aws の検査（段1）"
+path = '''^(?:docs/ローカル実行とCI\.md|README\.md|AGENTS\.md|docs/ポート公開範囲\.md|squid-config/squid\.conf|squid-config/whitelist\.txt|ecs/task-definition\.template\.json|ecs/squid/Dockerfile|ecs/squid/derive-config\.sh|ecs/squid/entrypoint\.sh|docs/E2Eテスト\.md)$'''
+regex = '''arn:aws'''
+
+[[rules]]
+id = "identity-doc-akia"
+description = "置き換え前の t_doc_has_no_identity_values（m09）の AKIA の検査（段1）。unit_doc には無いが、m09 の検査の範囲を含める"
+path = '''^(?:docs/ローカル実行とCI\.md|README\.md|AGENTS\.md|docs/ポート公開範囲\.md|squid-config/squid\.conf|squid-config/whitelist\.txt|ecs/task-definition\.template\.json|ecs/squid/Dockerfile|ecs/squid/derive-config\.sh|ecs/squid/entrypoint\.sh|docs/E2Eテスト\.md)$'''
+regex = '''AKIA'''
+
+# 段2: path を指定せず、追跡対象の全体を値の形に絞って検出する。
+
+[[rules]]
+id = "identity-arn-shape"
+description = "ARN の形（arn:aws に続くパーティション、サービス、リージョン、12桁のアカウント）。置き換え前の arn:aws の検査を、値の形に絞って全体へ広げる（段2）"
+regex = '''arn:aws(?:-[a-z]+)*:[a-z0-9-]+:[a-z0-9-]*:[0-9]{12}:'''
+
+[[rules]]
+id = "identity-access-key-shape"
+description = "アクセスキーの形（AKIA または ASIA に続く英大文字と数字の16文字）。置き換え前の AKIA の検査を、値の形に絞って全体へ広げる（段2）"
+regex = '''\b(?:AKIA|ASIA)[A-Z0-9]{16}\b'''
+
+[[rules]]
+id = "identity-account-id-near-keyword"
+description = "アカウントIDの形（account または aws の語が近くにある12桁の数字）。置き換え前の 12桁の検査を、語の近くに絞って全体へ広げる（段2）"
+regex = '''(?i)(?:account|aws)[^0-9\r\n]{0,20}[0-9]{12}\b'''
+
+[[rules]]
+id = "identity-ecr-uri-shape"
+description = "ECR のイメージURIの形（12桁のアカウントIDの直後に .dkr.ecr. が続く）。12桁の番号を含む URI を、語の有無によらず検出する（段2）"
+regex = '''[0-9]{12}\.dkr\.ecr\.'''

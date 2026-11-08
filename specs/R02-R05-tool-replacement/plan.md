@@ -401,9 +401,10 @@ SHAの固定は、`uses`の値を`yq`で取り出して正規表現で比べる�
 
 ### 8.5 `.gitignore`との関係
 
-`gitleaks dir`が`.gitignore`を尊重するかは未確認（13章）。尊重しない場合は、追跡対象でない生成物（`node_modules/`、`e2e-logs/`）だけを、
-規則の`allowlist`にパスと理由つきで書く（FR-R0237）。この2つ以外のパスの除外は書かない。
-尊重する場合は、除外を書かない。
+`gitleaks dir`は`.gitignore`を尊重しない（13章 U7、確認済み）。このため、追跡対象でない生成物（`node_modules/`、`e2e-logs/`）だけを、
+必要になった場合に限り、規則の`allowlist`にパスと理由つきで書く（FR-R0237）。この2つ以外のパスの除外は書かない。
+実測（`verification/phase-2-results.md` 3章）: 作業ツリー全体（`node_modules/`と`e2e-logs/`を含む、実在するもの）を走査し、検出は0件だった。
+このため、除外は書かない（T-R0240は省略する）。将来、`node_modules/`や`e2e-logs/`に識別情報の形が現れて誤検知が起きたときに、理由つきでallowlistを足す。
 
 ## 9. R05（jq）の設計
 
@@ -615,10 +616,10 @@ R01の8.1節と同じ手順で、リポジトリの`mise.toml`を書き換えず
 | U4 | `--version`の出力の形と`mise current`の値 | 5つの出力から版を取り出す式。jqの`1.8.2`と`jq-1.8.2`の表記。gitleaksは`version`サブコマンドか | commit 0 | 確認済み（出力の形と版の取り出し。phase-0-results.md 4章） |
 | U5 | 取得物の完全性 | `mise.lock`のSHA256が、公式の資産の値と一致するか（`gh api`の`digest`、または`checksums`ファイル） | commit 0 | 確認済み（24件一致。phase-0-results.md 3章） |
 | U6 | `jdx/mise-action`の`install_args: --locked` | ソースで受理される形か。`--locked`が重複しないか | commit 0（初回のCIの前） | 確認済み（ソースで受理、重複しない。phase-0-results.md 6章） |
-| U7 | `gitleaks dir`と`.gitignore` | `.gitignore`の対象（`node_modules/`、`e2e-logs/`）を走査するか。走査するなら8.5節の除外を書く | commit 2 | 未確認 |
-| U8 | gitleaksの`dir`の走査範囲 | 追跡対象でない一時ファイルを検出するか。壊した入力の置き方（8.3節）に影響する | commit 2 | 未確認 |
+| U7 | `gitleaks dir`と`.gitignore` | `.gitignore`の対象（`node_modules/`、`e2e-logs/`）を走査するか。走査するなら8.5節の除外を書く | commit 2 | 確認済み（尊重しない。`.gitignore`の対象の値も検出した。`verification/phase-2-results.md` 1章） |
+| U8 | gitleaksの`dir`の走査範囲 | 追跡対象でない一時ファイルを検出するか。壊した入力の置き方（8.3節）に影響する | commit 2 | 確認済み（検出する。`verification/phase-2-results.md` 1章） |
 | U9 | gitleaksの規則の機能 | `[[rules.allowlists]]`の`condition = "AND"`と`paths`、`regexes`が、8.30.1で使えるか。`path`のみの規則（正規表現の`path`）の書き方 | commit 2 | 未確認 |
-| U10 | 2段の規則の最終形と、除外が要る行 | 実測で検出の一覧を取り、8.2節の表を埋める。0件の可能性もある | commit 2 | 未確認 |
+| U10 | 2段の規則の最終形と、除外が要る行 | 実測で検出の一覧を取り、8.2節の表を埋める。0件の可能性もある | commit 2 | 確認済み（既存の範囲の検出は0件。除外は不要。`verification/phase-2-results.md` 3章） |
 | U11 | actionlintと`shellcheck` | 既存の`run:`で指摘が出るか。`shellcheck`がPATHに無いときの挙動。`-ignore`が要るか。`run:`の形（引数の渡し方） | commit 1 | 未確認 |
 | U12 | `.bats`をshellcheckの対象に含めるか | `shellcheck -s bats`が0.11.0で使えるか。使えなければ`.bash`の補助だけを`-s bash`で検査する | commit 4 | 未確認 |
 | U13 | `bats --filter-tags`と`test_tags` | 1.14.0で使えるか。`unit`、`smoke`、`contract`の絞り込みで、旧のモードと同じ件数になるか | commit 4 | 未確認 |

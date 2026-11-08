@@ -423,7 +423,7 @@ unit_cleanup_reset() {
 }
 
 # 文書の検査。文書があり、README から参照され、4シナリオの名前が書かれていること。
-# AWSアカウントIDらしき12桁の数字と arn:aws が無いことも確かめる（NFR-807）。
+# 識別情報の検査（12桁の数字、arn:aws）は、gitleaks の規則（品質ゲート）へ移した。このunitは確かめない。
 unit_doc() {
   _doc="$ROOT/docs/E2Eテスト.md"
   [ -f "$_doc" ] || return 1
@@ -431,8 +431,6 @@ unit_doc() {
   for _n in normal error-500-then-200 ratelimit-429 slow-5000; do
     grep -Fq "$_n" "$_doc" || return 1
   done
-  ! grep -Eq '[0-9]{12}' "$_doc" || return 1
-  ! grep -Fq 'arn:aws' "$_doc"
 }
 
 unit_main() {
