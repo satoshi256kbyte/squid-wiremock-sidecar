@@ -175,11 +175,28 @@ swsc_stage_squid_context() { # 出力先ディレクトリ
 # WireMock が受けた /api/ の要求の件数を返す。
 # Why: Squid が起動後に送る /squid-internal-periodic/ の要求を数えないため（G1、G3）。
 # Why not meta.total: 同じ理由で、件数が1つずれる。
+# jq の実体を、固定版の照合（resolve_tool）で得る。最初に使うときだけ照合し、以後は同じ値を使う。
+# Why: 読み込みに副作用を持たせず、jq が要る関数の中で照合する。未導入や版違いは導入手順つきで失敗する。
+swsc_jq() {
+  if [ -z "${SWSC_JQ:-}" ]; then
+    # shellcheck source=/dev/null
+    . "$SWSC_ROOT/scripts/lib/resolve-tool.sh"
+    resolve_tool jq 's/^jq-//p' --version || return 1
+    SWSC_JQ=$RESOLVED_PATH
+  fi
+  printf '%s' "$SWSC_JQ"
+}
+
+# 標準入力の __admin/requests の本文から、/api/ で始まる URL の件数を出す。
+# Why: 経路の接頭辞だけで数える。/squid-internal-periodic/ の要求は数えない（G1、G3）。
+swsc_count_api_requests() {
+  _jq=$(swsc_jq) || return 1
+  "$_jq" '[(.requests // [])[] | select(((.request.url // "") | tostring) | startswith("/api/"))] | length'
+}
+
 swsc_wiremock_total() {
   _body=$(curl -fsS --max-time 5 http://127.0.0.1:8080/__admin/requests) || return 1
-  printf '%s' "$_body" | python3 -B -c "import json, sys
-d = json.load(sys.stdin)
-print(sum(1 for r in d.get('requests', []) if str(r.get('request', {}).get('url', '')).startswith('/api/')))"
+  printf '%s' "$_body" | swsc_count_api_requests
 }
 
 # 指定した経路と完全一致する URL の受信数を返す。取得や解析に失敗したら1。

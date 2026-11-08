@@ -279,6 +279,24 @@ mise install --locked
 | yq | `yq (https://github.com/mikefarah/yq/) version v4.54.2` | `version v` の後 |
 | shellcheck | `version: 0.11.0` | 既存の方式 |
 
+### JSON の値の取り出し
+
+テストの JSON の単純な値は `jq -e` で取り出す。`jq` は `resolve_tool` で固定版を照合して得る。
+未導入や版違いは、導入手順つきで失敗する。
+
+`jq -e` は、`null`、`false`、結果が無いときに失敗する。JSON として壊れている場合も失敗する。
+件数のように整数だけを受け付ける値は、型と範囲も jq の式で確かめる。
+
+次のものは、取り出しの対象外として `python3` と `sed` のまま残す。
+
+| 対象 | 理由 |
+| --- | --- |
+| `scripts/e2e-taskdef.py`、`scripts/scenario-lib.sh` | 複雑な整合検査で、変更しない |
+| JSON を書き換えて写しを作るテスト補助（`mutate` など） | 取り出しではなく、壊した入力や変更後の写しを作る |
+| Docker の出力を複数の条件で確かめる検査（`contract_c4`） | 複数の条件と、個別の失敗文言を持つ |
+| `scripts/e2e-lib.sh` の `swsc_wiremock_count_path` | 経路の完全一致の件数と、`requests[]` と `meta.total` の整合を、個別の失敗文言で確かめる |
+| `key=value` の行と Markdown の処理 | JSON ではないため、`sed` と `awk` のまま |
+
 ### bats と jq、yq の扱い
 
 - bats は `github_archive` で導入し、タグのソースのアーカイブを取得する。ビルド済みのバイナリではない。

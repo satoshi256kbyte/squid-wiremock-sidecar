@@ -49,6 +49,9 @@ actionlint、gitleaks、bats、jq、yq の各ゲートは、そのツールを�
 M09 の契約の検査は、ワークフローの YAML を `yq -e` で構造比較する。PyYAML は使わない。
 `yq` の版は、Markdown のゲートの前に、固定版と照合する。
 
+JSON の単純な値は `jq -e` で取り出す。`jq` の版は、JSON を扱う検査より前に、品質ゲートの先頭で固定版と照合する。
+`null` と `false` は失敗にする。`e2e-taskdef.py` と `scripts/scenario-lib.sh` は変えない。
+
 品質ゲートは `sh scripts/quality-gate.sh` で実行する。
 既定ではorigin/mainとの差分から変更範囲を判定し、該当するゲートだけを実行する。
 Markdown検査には依存の導入が必要であり、初回は `npm ci` を実行する。

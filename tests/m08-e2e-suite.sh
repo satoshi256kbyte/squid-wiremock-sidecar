@@ -433,8 +433,19 @@ unit_doc() {
   done
 }
 
+# 件数の取り出し: 空、null、文字列、負の数は失敗し、0 と正の整数は通る（T-R0260）。
+unit_count_extraction_rejects_empty_and_null() {
+  wiremock_count_value "" >/dev/null 2>&1 && return 1
+  wiremock_count_value '{"count":null}' >/dev/null 2>&1 && return 1
+  wiremock_count_value '{"count":"3"}' >/dev/null 2>&1 && return 1
+  wiremock_count_value '{"count":-1}' >/dev/null 2>&1 && return 1
+  [ "$(wiremock_count_value '{"count": 3}')" = 3 ] || return 1
+  [ "$(wiremock_count_value '{"count":0}')" = 0 ]
+}
+
 unit_main() {
   check "引数: 不正なモード、unit への名前、未定義、対象外は終了コード2" unit_arg_codes
+  check "m08_count_extraction: 空、null、文字列、負の数は失敗し、0と正の整数は通る" unit_count_extraction_rejects_empty_and_null
   check "既定の順は normal、error-500-then-200、ratelimit-429、slow-5000" unit_default_order
   check "Docker を呼ばない（docker を PATH の先頭に置く）" unit_no_docker
   check "m08_scenario_expectations: シナリオ表（パス、期待値、上書き設定）" unit_scenario_table
@@ -607,12 +618,31 @@ run_client() { # パス 上書き設定（空可） 出力先
 
 # WireMock の管理APIで、パス一致の呼び出し件数だけを読む。M06 と M07 の定義を複製する。
 # Why: 共通化すると scenario-lib.sh の変更が要るため、M08 の検査入口に置く（NFR-802）。
+# jq の実体は、固定版を照合して得る（件数の取り出しに使う）。最初に使うときだけ照合する。
+m08_jq() {
+  if [ -z "${jq_bin:-}" ]; then
+    # shellcheck source=/dev/null
+    . "$ROOT/scripts/lib/resolve-tool.sh"
+    resolve_tool jq 's/^jq-//p' --version || return 1
+    jq_bin=$RESOLVED_PATH
+  fi
+}
+
+# 応答の本文から件数（"count"）を出す。件数は 0 以上の整数だけを受け付ける。
+# Why: 旧の sed は数字の並びだけを拾い、文字列、負の数、空、null を失敗にしていた。同じ判定を jq で保つため。
+wiremock_count_value() { # 応答の本文
+  m08_jq || return 1
+  printf '%s' "$1" | "$jq_bin" -e -r '
+    if (.count | type) == "number" and .count >= 0 and .count == (.count | floor) then .count else empty end
+  '
+}
+
 wiremock_count() { # URLパス
   _base=${WIREMOCK_URL:-http://127.0.0.1:8080}
   _body=$(printf '{"method":"GET","url":"%s"}' "$1")
   _res=$(curl --fail --silent --show-error --connect-timeout 2 --max-time 10 -H 'Content-Type: application/json' \
     -d "$_body" "$_base/__admin/requests/count") || return 1
-  _n=$(printf '%s' "$_res" | sed -n 's/.*"count" *: *\([0-9][0-9]*\).*/\1/p')
+  _n=$(wiremock_count_value "$_res") || return 1
   [ -n "$_n" ] || return 1
   printf '%s' "$_n"
 }

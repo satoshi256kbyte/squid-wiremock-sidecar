@@ -1,6 +1,8 @@
 #!/bin/sh
-# M03 WireMock シナリオの検査。新基盤で WireMock を起動し、mapping の静的検査、
-# 管理APIの応答、本文、ステータス、遅延を確かめる。
+# M03 WireMock シナリオの検査。
+#   unit:  Docker を使わず、mapping と JSON の判定（validate_json、validate_mapping）だけを確かめる。
+#   smoke: 新基盤で WireMock を起動し、mapping の静的検査、管理APIの応答、本文、ステータス、遅延を確かめる。
+# 引数を省略すると smoke になる（品質ゲートの既存の呼び出しを変えないため）。
 set -eu
 
 ROOT=$(cd "$(dirname "$0")/.." && pwd)
@@ -13,6 +15,132 @@ SWSC_ROOT=$ROOT
 # shellcheck source=/dev/null
 . "$ROOT/scripts/scenario-lib.sh"
 cd "$ROOT"
+
+# jq の実体は、固定版を照合して得る。未導入や版違いは、ロックを取る前に導入手順つきで止まる。
+# shellcheck source=/dev/null
+. "$ROOT/scripts/lib/resolve-tool.sh"
+resolve_tool jq 's/^jq-//p' --version || exit 1
+jq_bin=$RESOLVED_PATH
+
+# JSON の値が1つだけ入っているかを見る。-s で全体を1つの配列として読み、件数が1のときだけ成功する。
+# Why: 空ファイルと、JSON が2つ連続した入力（{} {}）を失敗にするため（旧の json.load と同じ）。
+# null と [] は値が1つなので成功する（plan 9.3 節の旧の判定を保つ）。
+validate_json() {
+  "$jq_bin" -e -s 'length == 1' "$1" >/dev/null
+}
+
+# 必須の項目（request.method、request.urlPath、response.status）を確かめる。
+# -e を付けるため、欠落や null は失敗する。失敗時は欠けた項目名を旧と同じ形式で標準エラーに出す。
+validate_mapping() {
+  if "$jq_bin" -e '
+    (.request | type == "object" and has("method") and has("urlPath")) and
+    (.response | type == "object" and has("status"))
+  ' "$1" >/dev/null 2>&1; then
+    return 0
+  fi
+  _missing=$("$jq_bin" -r '
+    [
+      (if (.request | type) == "object" and (.request | has("method")) then empty else "request.method" end),
+      (if (.request | type) == "object" and (.request | has("urlPath")) then empty else "request.urlPath" end),
+      (if (.response | type) == "object" and (.response | has("status")) then empty else "response.status" end)
+    ] | join(", ")
+  ' "$1" 2>/dev/null || true)
+  printf '%s\n' "missing mapping fields: ${_missing:-(not an object)}" >&2
+  return 1
+}
+
+# ---------------------------------------------------------------------------
+# unit: Docker を使わない判定の検査。validate_json と validate_mapping の旧の判定（plan 9.3 節）を固定する。
+# Why: 旧の Python 実装と新しい jq 実装が、同じ入力で同じ判定になることを、Docker なしで確かめるため。
+# ---------------------------------------------------------------------------
+
+unit_validate_json_rejects_broken_json() {
+  printf '%s' '{' > "$unit_dir/broken.json"
+  ! validate_json "$unit_dir/broken.json" >/dev/null 2>&1
+}
+
+unit_validate_json_keeps_empty_array_and_null() {
+  printf '%s\n' '[]' > "$unit_dir/empty.json"
+  printf '%s\n' 'null' > "$unit_dir/null.json"
+  validate_json "$unit_dir/empty.json" >/dev/null 2>&1 || return 1
+  validate_json "$unit_dir/null.json" >/dev/null 2>&1
+}
+
+unit_validate_json_rejects_empty_and_multiple_values() {
+  : > "$unit_dir/empty-file.json"
+  printf '%s\n' '{} {}' > "$unit_dir/two-values.json"
+  if validate_json "$unit_dir/empty-file.json" >/dev/null 2>&1; then
+    return 1
+  fi
+  ! validate_json "$unit_dir/two-values.json" >/dev/null 2>&1
+}
+
+unit_validate_mapping_accepts_complete_mapping() {
+  printf '%s\n' '{"request":{"method":"GET","urlPath":"/a"},"response":{"status":200}}' > "$unit_dir/ok.json"
+  validate_mapping "$unit_dir/ok.json" >/dev/null 2>&1
+}
+
+unit_validate_mapping_rejects_missing_key() {
+  printf '%s\n' '{"request":{"method":"GET"},"response":{"status":200}}' > "$unit_dir/missing.json"
+  if validate_mapping "$unit_dir/missing.json" >/dev/null 2>"$unit_dir/missing.err"; then
+    return 1
+  fi
+  grep -Fq 'request.urlPath' "$unit_dir/missing.err"
+}
+
+unit_validate_mapping_rejects_empty_array_and_null() {
+  printf '%s\n' '[]' > "$unit_dir/empty.json"
+  printf '%s\n' 'null' > "$unit_dir/null.json"
+  if validate_mapping "$unit_dir/empty.json" >/dev/null 2>&1; then
+    return 1
+  fi
+  ! validate_mapping "$unit_dir/null.json" >/dev/null 2>&1
+}
+
+run_unit() {
+  unit_dir=$(mktemp -d) || return 1
+  # Why: 一時ディレクトリは、この検査だけが作って消す（ロックも Docker も使わない）。
+  trap 'rm -f "$unit_dir"/* || true; rmdir "$unit_dir" || true' EXIT
+  _fail=0
+  for _case in \
+    unit_validate_json_rejects_broken_json \
+    unit_validate_json_keeps_empty_array_and_null \
+    unit_validate_json_rejects_empty_and_multiple_values \
+    unit_validate_mapping_accepts_complete_mapping \
+    unit_validate_mapping_rejects_missing_key \
+    unit_validate_mapping_rejects_empty_array_and_null
+  do
+    if "$_case"; then
+      printf 'ok: %s\n' "$_case"
+    else
+      printf 'FAIL: %s\n' "$_case"
+      _fail=$((_fail + 1))
+    fi
+  done
+  if [ "$_fail" -ne 0 ]; then
+    printf 'unit: %s 件失敗\n' "$_fail"
+    return 1
+  fi
+  printf '%s\n' 'M03 unit: 全件通過'
+  return 0
+}
+
+mode=${1:-smoke}
+case "$mode" in
+  unit)
+    run_unit
+    exit $?
+    ;;
+  smoke) ;;
+  *)
+    printf '%s\n' '使い方: sh tests/m03-wiremock-scenarios.sh [unit|smoke]' >&2
+    exit 2
+    ;;
+esac
+
+# ---------------------------------------------------------------------------
+# smoke: WireMock を起動して確かめる。
+# ---------------------------------------------------------------------------
 
 wiremock_url="${WIREMOCK_URL:-http://127.0.0.1:8080}"
 
@@ -43,34 +171,6 @@ until curl --fail --silent --show-error "$wiremock_url/__admin/mappings" >/dev/n
   [ "$attempt" -lt 30 ] || exit 1
   sleep 1
 done
-
-validate_json() {
-  python3 - "$1" <<'PY'
-import json
-import sys
-
-with open(sys.argv[1], encoding="utf-8") as stream:
-    json.load(stream)
-PY
-}
-
-validate_mapping() {
-  python3 - "$1" <<'PY'
-import json
-import sys
-
-with open(sys.argv[1], encoding="utf-8") as stream:
-    mapping = json.load(stream)
-
-request = mapping.get("request", {})
-response = mapping.get("response", {})
-required_request = {"method", "urlPath"}
-missing_request = required_request - request.keys()
-if missing_request or "status" not in response:
-    missing = sorted(missing_request | ({"response.status"} if "status" not in response else set()))
-    raise SystemExit("missing mapping fields: " + ", ".join(missing))
-PY
-}
 
 for file in wiremock-scenarios/mappings/*.json wiremock-scenarios/__files/*.json; do
   validate_json "$file"

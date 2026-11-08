@@ -115,7 +115,7 @@ no_calls() { # 記録が空、または無いこと
 run_e2e() { # PATH 操作...
   _p=$1
   shift
-  env -i PATH="$_p" HOME="$TMP" SWSC_LOCK_DIR="$UNIT_LOCK" sh "$ROOT/scripts/e2e.sh" "$@"
+  env -i PATH="$_p" HOME="$TMP" SWSC_LOCK_DIR="$UNIT_LOCK" SWSC_JQ="$SWSC_JQ" sh "$ROOT/scripts/e2e.sh" "$@"
 }
 
 # ---------------------------------------------------------------------------
@@ -128,13 +128,13 @@ t_usage_rejects_bad_arguments() {
 }
 
 t_package_json_delegates_six_scripts() {
-  must python3 -B -c '
-import json, sys
-s = json.load(open(sys.argv[1]))["scripts"]
-want = ["start", "test", "logs", "stop", "clean", "test:ci"]
-ok = all(s.get(k) == "sh scripts/e2e.sh " + k for k in want) and "lint:md" in s
-sys.exit(0 if ok else 1)
-' "$ROOT/package.json"
+  # shellcheck disable=SC2016 # 単一引用符の中の $s、$k は jq の変数であり、シェルで展開させない。
+  must "$jq_bin" -e '
+    .scripts as $s
+    | (["start", "test", "logs", "stop", "clean", "test:ci"]
+        | all(. as $k | $s[$k] == ("sh scripts/e2e.sh " + $k)))
+      and ($s | has("lint:md"))
+  ' "$ROOT/package.json" >/dev/null
 }
 
 t_gitignore_hides_run_outputs() {
@@ -220,7 +220,7 @@ t_contract_without_credentials_stops_before_docker_and_aws() {
   make_base_bin "$TMP/base"
   make_shims "$TMP/shim"
   _r=0
-  env -i PATH="$TMP/shim:$TMP/base" HOME="$TMP" SWSC_LOCK_DIR="$UNIT_LOCK" sh "$ROOT/scripts/e2e.sh" contract \
+  env -i PATH="$TMP/shim:$TMP/base" HOME="$TMP" SWSC_LOCK_DIR="$UNIT_LOCK" SWSC_JQ="$SWSC_JQ" sh "$ROOT/scripts/e2e.sh" contract \
     >/dev/null 2>"$TMP/err" || _r=$?
   must [ "$_r" -eq 1 ]
   must grep -q 'AWS_ACCESS_KEY_ID' "$TMP/err"
@@ -232,7 +232,7 @@ t_contract_rejects_non_dummy_credentials() {
   make_base_bin "$TMP/base"
   make_shims "$TMP/shim"
   _r=0
-  env -i PATH="$TMP/shim:$TMP/base" HOME="$TMP" SWSC_LOCK_DIR="$UNIT_LOCK" \
+  env -i PATH="$TMP/shim:$TMP/base" HOME="$TMP" SWSC_LOCK_DIR="$UNIT_LOCK" SWSC_JQ="$SWSC_JQ" \
     AWS_ACCESS_KEY_ID=other AWS_SECRET_ACCESS_KEY=test \
     sh "$ROOT/scripts/e2e.sh" contract >/dev/null 2>"$TMP/err" || _r=$?
   must [ "$_r" -eq 1 ]
@@ -323,25 +323,20 @@ open(sys.argv[2], "w", encoding="utf-8").write(json.dumps(d, indent=2, ensure_as
 }
 
 t_template_is_valid_json_with_two_containers() {
-  must python3 -B -c '
-import json, sys
-d = json.load(open(sys.argv[1], encoding="utf-8"))
-names = [c["name"] for c in d["containerDefinitions"]]
-sys.exit(0 if names == ["client", "squid"] and d["networkMode"] == "awsvpc" else 1)
-' "$ROOT/ecs/task-definition.template.json"
+  must "$jq_bin" -e '
+    ([.containerDefinitions[].name] == ["client", "squid"]) and (.networkMode == "awsvpc")
+  ' "$ROOT/ecs/task-definition.template.json" >/dev/null
 }
 
 t_render_local_sets_upstream_and_mock_destination() {
   render_local "$TMP/local.json" >/dev/null 2>&1
-  must python3 -B -c '
-import json, sys
-d = json.load(open(sys.argv[1], encoding="utf-8"))
-squid = [c for c in d["containerDefinitions"] if c["name"] == "squid"][0]
-env = {e["name"]: e["value"] for e in squid["environment"]}
-ok = env.get("SQUID_UPSTREAM") == "mock" and env.get("SQUID_MOCK_HOST") == "swsc-wiremock" \
-    and env.get("SQUID_MOCK_PORT") == "8080" and squid["image"] == "swsc-squid:e2e"
-sys.exit(0 if ok else 1)
-' "$TMP/local.json"
+  # shellcheck disable=SC2016 # 単一引用符の中の $sq、$env は jq の変数であり、シェルで展開させない。
+  must "$jq_bin" -e '
+    ([.containerDefinitions[] | select(.name == "squid")][0]) as $sq
+    | ($sq.environment | map({(.name): .value}) | add) as $env
+    | ($env.SQUID_UPSTREAM == "mock") and ($env.SQUID_MOCK_HOST == "swsc-wiremock")
+      and ($env.SQUID_MOCK_PORT == "8080") and ($sq.image == "swsc-squid:e2e")
+  ' "$TMP/local.json" >/dev/null
 }
 
 t_render_is_byte_identical_for_same_input() {
@@ -409,27 +404,22 @@ t_render_rejects_malformed_values_without_printing_them() {
 
 t_render_fixes_task_level_values_and_omits_roles() {
   render_local "$TMP/out.json" >/dev/null 2>&1
-  must python3 -B -c '
-import json, sys
-d = json.load(open(sys.argv[1], encoding="utf-8"))
-ok = d["family"] == "swsc-e2e" and d["networkMode"] == "awsvpc" \
-    and d["requiresCompatibilities"] == ["FARGATE"] and d["cpu"] == "512" and d["memory"] == "1024" \
-    and "taskRoleArn" not in d and "executionRoleArn" not in d
-sys.exit(0 if ok else 1)
-' "$TMP/out.json"
+  must "$jq_bin" -e '
+    .family == "swsc-e2e" and .networkMode == "awsvpc"
+    and .requiresCompatibilities == ["FARGATE"] and .cpu == "512" and .memory == "1024"
+    and (has("taskRoleArn") | not) and (has("executionRoleArn") | not)
+  ' "$TMP/out.json" >/dev/null
 }
 
 t_client_has_proxy_settings_and_no_health_check() {
   render_local "$TMP/out.json" >/dev/null 2>&1
-  must python3 -B -c '
-import json, sys
-d = json.load(open(sys.argv[1], encoding="utf-8"))
-client = [c for c in d["containerDefinitions"] if c["name"] == "client"][0]
-env = {e["name"]: e["value"] for e in client["environment"]}
-ok = env.get("HTTP_PROXY") == "http://127.0.0.1:3128" and env.get("HTTPS_PROXY") == "http://127.0.0.1:3128" \
-    and env.get("NO_PROXY") == "localhost,127.0.0.1" and "healthCheck" not in client
-sys.exit(0 if ok else 1)
-' "$TMP/out.json"
+  # shellcheck disable=SC2016 # 単一引用符の中の $c、$env は jq の変数であり、シェルで展開させない。
+  must "$jq_bin" -e '
+    ([.containerDefinitions[] | select(.name == "client")][0]) as $c
+    | ($c.environment | map({(.name): .value}) | add) as $env
+    | ($env.HTTP_PROXY == "http://127.0.0.1:3128") and ($env.HTTPS_PROXY == "http://127.0.0.1:3128")
+      and ($env.NO_PROXY == "localhost,127.0.0.1") and ($c | has("healthCheck") | not)
+  ' "$TMP/out.json" >/dev/null
 }
 
 t_template_names_no_mock_default_or_role_arn() {
@@ -790,7 +780,8 @@ contract_setup() {
 # Why: 実際の docker と aws に触れず、利用者の AWS 設定を混ぜないため。出力先も一時領域へ向ける。
 contract_run() { # 本体
   # shellcheck disable=SC2016 # 単一引用符の中の変数は、子の sh が環境変数から展開する。親のシェルでは展開させない意図。 子の sh が SWSC_ROOT から e2e-lib.sh と e2e-contract.sh を読み、eval で与えた文を評価する。
-  env -i PATH="$TMP/cfake:$TMP/cbase" HOME="$TMP" SWSC_ROOT="$ROOT" SWSC_E2E_DIR="$TMP/e2e" \
+  # shellcheck disable=SC2031 # SWSC_JQ は run_unit で一度だけ設定し、以後は変えない。子の sh に渡すだけの読み取り。
+  env -i PATH="$TMP/cfake:$TMP/cbase" HOME="$TMP" SWSC_ROOT="$ROOT" SWSC_E2E_DIR="$TMP/e2e" SWSC_JQ="$SWSC_JQ" \
     SWSC_LOCK_DIR="$UNIT_LOCK" SWSC_LOG_DIR="$TMP/logs" \
     SWSC_TEST_DIR="$TMP" SWSC_TEST_SEQ="$TMP/seq.log" SWSC_CONTRACT_WAIT_SECONDS=1 \
     AWS_ACCESS_KEY_ID=test AWS_SECRET_ACCESS_KEY=test \
@@ -1215,7 +1206,8 @@ runner_setup() {
 # Why: 実際の docker と curl に触れず、利用者の AWS 設定や環境変数を検査に混ぜないため。
 runner_run() { # 本体
   # shellcheck disable=SC2016 # 単一引用符の中の変数は、子の sh が環境変数から展開する。親のシェルでは展開させない意図。 子の sh が SWSC_ROOT から e2e-lib.sh と e2e-runner.sh を読み、eval で与えた文を評価する。
-  env -i PATH="$TMP/rfake:$TMP/rbase" HOME="$TMP" SWSC_ROOT="$ROOT" SWSC_TEST_DIR="$TMP" SWSC_LOCK_DIR="$UNIT_LOCK" \
+  # shellcheck disable=SC2031 # SWSC_JQ は run_unit で一度だけ設定し、以後は変えない。子の sh に渡すだけの読み取り。
+  env -i PATH="$TMP/rfake:$TMP/rbase" HOME="$TMP" SWSC_ROOT="$ROOT" SWSC_TEST_DIR="$TMP" SWSC_LOCK_DIR="$UNIT_LOCK" SWSC_JQ="$SWSC_JQ" \
     SWSC_TEST_SEQ="$TMP/seq.log" SWSC_WAIT_SECONDS=2 \
     sh -c '. "$SWSC_ROOT/scripts/e2e-lib.sh"; . "$SWSC_ROOT/scripts/e2e-runner.sh"; eval "$1"' sh "$1"
 }
@@ -1551,16 +1543,18 @@ entry_setup() {
 
 # scripts/e2e.sh を、偽の PATH と空の環境で実行する。出力先は一時領域へ向ける。
 entry_run() { # 操作...
+  # shellcheck disable=SC2031 # SWSC_JQ は run_unit で一度だけ設定し、以後は変えない。子の sh に渡すだけの読み取り。
   env -i PATH="$TMP/efake:$TMP/ebase" HOME="$TMP" SWSC_LOCK_DIR="$UNIT_LOCK" SWSC_E2E_DIR="$TMP/e2e" SWSC_LOG_DIR="$TMP/logs" \
-    SWSC_TEST_DIR="$TMP" SWSC_TEST_SEQ="$TMP/seq.log" SWSC_WAIT_SECONDS=2 SWSC_CONTRACT_WAIT_SECONDS=1 \
+    SWSC_TEST_DIR="$TMP" SWSC_TEST_SEQ="$TMP/seq.log" SWSC_WAIT_SECONDS=2 SWSC_CONTRACT_WAIT_SECONDS=1 SWSC_JQ="$SWSC_JQ" \
     sh "$ROOT/scripts/e2e.sh" "$@"
 }
 
 # e2e-lib.sh と e2e-runner.sh を読み込んだ子シェルで、与えた文を評価する。関数の差し替えに使う。
 lib_call() { # 文
   # shellcheck disable=SC2016 # 単一引用符の中の変数は、子の sh が環境変数から展開する。親のシェルでは展開させない意図。 子の sh が SWSC_ROOT から e2e-lib.sh と e2e-runner.sh を読み、eval で与えた文を評価する。
+  # shellcheck disable=SC2031 # SWSC_JQ は run_unit で一度だけ設定し、以後は変えない。子の sh に渡すだけの読み取り。
   env -i PATH="$TMP/efake:$TMP/ebase" HOME="$TMP" SWSC_ROOT="$ROOT" SWSC_LOCK_DIR="$UNIT_LOCK" SWSC_E2E_DIR="$TMP/e2e" \
-    SWSC_LOG_DIR="$TMP/logs" SWSC_TEST_DIR="$TMP" SWSC_TEST_SEQ="$TMP/seq.log" SWSC_WAIT_SECONDS=2 \
+    SWSC_LOG_DIR="$TMP/logs" SWSC_TEST_DIR="$TMP" SWSC_TEST_SEQ="$TMP/seq.log" SWSC_WAIT_SECONDS=2 SWSC_JQ="$SWSC_JQ" \
     sh -c '. "$SWSC_ROOT/scripts/e2e-lib.sh"; . "$SWSC_ROOT/scripts/e2e-runner.sh"; eval "$1"' sh "$1"
 }
 
@@ -3097,6 +3091,48 @@ t_gate_runs_pinned_tools() {
   [ "$(gate_sources | grep -vE '^[[:space:]]*#' | grep -cF '|| true' || true)" -eq 0 ]
 }
 
+# T-R0254: 品質ゲートは、JSON を扱う検査より前に、jq の実体と版を確かめる。
+# Why: jq を先頭で照合しないと、未導入や版違いが後段の JSON の検査の途中で、分かりにくい失敗として現れるため。
+t_gate_checks_jq_first() {
+  _gf=$ROOT/scripts/quality-gate.sh
+  _jq=$(grep -n '^if ! resolve_tool jq ' "$_gf" | head -1 | cut -d: -f1)
+  _yq=$(grep -n '^if ! resolve_tool yq ' "$_gf" | head -1 | cut -d: -f1)
+  [ -n "$_jq" ] || return 1
+  [ -n "$_yq" ] || return 1
+  [ "$_jq" -lt "$_yq" ] || return 1
+  sed -n "${_jq}p" "$_gf" | grep -Fq "resolve_tool jq 's/^jq-//p' --version" || return 1
+  return 0
+}
+
+# swsc_count_api_requests（jq）は、接頭辞 /api/ の URL だけを数える。固定の入力で件数を確かめる。
+t_count_api_requests_counts_only_api_urls() {
+  printf '%s' '{"requests":[{"request":{"url":"/api/a"}},{"request":{"url":"/squid-internal-periodic/x"}},{"request":{"url":"/api/b"}}]}' \
+    > "$TMP/requests.json"
+  SWSC_ROOT=$ROOT
+  _n=$(. "$ROOT/scripts/e2e-lib.sh"; swsc_count_api_requests < "$TMP/requests.json") || return 1
+  must [ "$_n" = 2 ]
+}
+
+# T-R0253: JSON の値の取り出しは jq に置き換える（plan 9.2 節）。Python の json.load を残してよいのは、
+# JSON を書き換える mutate() の中だけである。取り出しではなく、壊した入力や変更後の JSON を作るための経路だから。
+# Why: m03 と m07 の取り出しを、jq へ移したことを、json.load の不在で確かめる。
+t_json_extraction_uses_jq() {
+  for _f in m03-wiremock-scenarios.sh m07-scenario-isolation.sh; do
+    [ "$(grep -c 'json\.load(' "$ROOT/tests/$_f" || true)" -eq 0 ] || return 1
+  done
+  # m09 は、JSON を書き換えて写しを作る関数と、Docker の出力を複数の条件で確かめる関数を除き、JSON の読み込みを残さない。
+  # Why: これらは取り出しではなく、壊した入力や変更後の写しを作る経路（mutate と同じ役割）である。
+  #      contract_c4 は複数の条件と個別の失敗文言を持つため、値の取り出しの置き換えの対象外とする。
+  _outside=$(awk '/^(mutate|desc_mutate|runner_mutate|contract_base|contract_c4|contract_c6)\(\) \{/ { inm = 1 } inm && /^}/ { inm = 0; next } !inm' \
+    "$ROOT/tests/m09-execution-and-ci.sh" | grep -c 'json\.load(' || true)
+  [ "$_outside" -eq 0 ] || return 1
+  # scripts の e2e-contract.sh は JSON を読まない。e2e-lib.sh は、詳細な判定の swsc_wiremock_count_path だけが読む。
+  [ "$(grep -c 'json\.load(' "$ROOT/scripts/e2e-contract.sh" || true)" -eq 0 ] || return 1
+  _lib=$(awk '/^swsc_wiremock_count_path\(\) \{/ { inm = 1 } inm && /^}/ { inm = 0; next } !inm' \
+    "$ROOT/scripts/e2e-lib.sh" | grep -c 'json\.load(' || true)
+  [ "$_lib" -eq 0 ]
+}
+
 # T-R0235: .gitleaks.toml は独自の規則だけを持ち、既定の規則の読み込み（useDefault）、
 # トップレベルの [allowlist]、stopwords を書かない。コメントの中の語は対象外。
 # Why: 既定の規則や全体の除外は、置き換え前の検査の範囲を黙って狭めるため（clarify.md 7章）。
@@ -3922,6 +3958,16 @@ t_entry_trap_exit_143_contract_term_releases_lock() {
 }
 
 run_unit() {
+  # jq の実体は、固定版を照合して得る（JSON の値の取り出しに使う）。未導入や版違いは、ここで導入手順つきに止まる。
+  # Why: unit だけが使う。contract の検査は認証情報の無い環境で止まる必要があるため、入口では照合しない。
+  # shellcheck source=/dev/null
+  . "$ROOT/scripts/lib/resolve-tool.sh"
+  resolve_tool jq 's/^jq-//p' --version || exit 1
+  jq_bin=$RESOLVED_PATH
+  # Why: 検査の sandbox は PATH を絞るため mise が見えない。照合済みの jq を、同じ版として引き継ぐ。
+  # swsc_jq は SWSC_JQ が設定されていれば照合しない（scripts/e2e-lib.sh）。
+  SWSC_JQ=$jq_bin
+  export SWSC_JQ
   TMP=$(mktemp -d)
   # Why: 検査ごとに空にする検査専用のロック置き場。実ホストの既定のロックを使わないため。
   UNIT_LOCK_BASE=$(lock_case_dir) || exit 1
@@ -4105,6 +4151,9 @@ run_unit() {
   check '各ステップは計画どおりの入口を1つだけ呼ぶ' t_wf_each_step_runs_its_command
   check 'docker compose と docker-compose を呼ばない' t_wf_has_no_docker_compose_call
   check '品質ゲートは actionlint、gitleaks、yq を mise which で得て、3つの環境変数を付け、mise exec と || true を使わない' t_gate_runs_pinned_tools
+  check '品質ゲートは、JSON の検査より前に jq の実体と版を確かめる' t_gate_checks_jq_first
+  check 'JSON の値の取り出しは jq へ移し、json.load は mutate() の中だけに残す' t_json_extraction_uses_jq
+  check 'swsc_count_api_requests は /api/ で始まる URL の件数だけを数える' t_count_api_requests_counts_only_api_urls
   check '.gitleaks.toml は useDefault、トップレベルの [allowlist]、stopwords を持たない' t_gitleaks_config_has_no_global_allowlist
   check 'gitleaks の段2の3規則は実行時に組み立てた値を検出し、値を出さない' t_gitleaks_rules_detect_runtime_built_values
   check 'gitleaks の段1の path 規則は FR-R0210 の11ファイルに当たり、対象外のパスには当たらない' t_gitleaks_path_rules_cover_eleven_files

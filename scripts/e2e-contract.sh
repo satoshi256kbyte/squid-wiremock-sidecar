@@ -104,8 +104,11 @@ contract_main() {
   esac
 
   # 6. describe で、比べる項目だけを取り出す
-  _family=$(python3 -B -c 'import json, sys; print(json.load(open(sys.argv[1], encoding="utf-8"))["family"])' \
-    "$SWSC_E2E_DIR/taskdef.json") || {
+  _jq=$(swsc_jq) || {
+    swsc_contract_fail 取り出し "jq を得られない（mise install --locked を実行する）"
+    return 1
+  }
+  _family=$("$_jq" -e -r '.family' "$SWSC_E2E_DIR/taskdef.json") || {
     swsc_contract_fail 取り出し "完成版から family を読めない"
     return 1
   }

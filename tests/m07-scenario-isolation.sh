@@ -17,6 +17,11 @@ case "$MODE" in
 esac
 
 cd "$ROOT"
+# jq の実体は、固定版を照合して得る（unit と smoke の両方が使う）。未導入や版違いは、ここで導入手順つきに止まる。
+# shellcheck source=/dev/null
+. "$ROOT/scripts/lib/resolve-tool.sh"
+resolve_tool jq 's/^jq-//p' --version || exit 1
+jq_bin=$RESOLVED_PATH
 # 読み込みに副作用はない。関数を試験ごとに呼ぶために、ここで読み込む。
 . "$ROOT/scripts/scenario-lib.sh"
 # 新基盤の共通部品（ロック、起動、Client 実行、停止）。読み込みに副作用はない。
@@ -205,50 +210,54 @@ unit_static_check() {
   expect_static_reject "名前の形式: 大文字とアンダースコア" "$_format"
 }
 
-# 状態遷移の2ファイルが plan 4.2 のとおりに書かれている
-unit_state_machine_files() {
+# error-500-then-200 の2定義が plan 4.2 のとおりに書かれ、互いに整合する（T-R0258、T-R0259）。
+# 旧の Python と同じ項目を jq -e で確かめる。-s で2つのファイルを配列として読む。
+unit_error_500_then_200_definitions_match() {
   _m=wiremock-scenarios/mappings
   if [ ! -f "$_m/error-500-then-200-1.json" ] || [ ! -f "$_m/error-500-then-200-2.json" ]; then
     record_fail "状態遷移の2ファイルが存在する"
     return 0
   fi
   total=$((total + 1))
-  if ! python3 - "$_m/error-500-then-200-1.json" "$_m/error-500-then-200-2.json" <<'PY'
-import json
-import sys
-
-
-def load(path):
-    with open(path, encoding="utf-8") as stream:
-        return json.load(stream)
-
-
-first = load(sys.argv[1])
-second = load(sys.argv[2])
-
-for stub in (first, second):
-    if stub.get("name") != "error-500-then-200" or stub.get("scenarioName") != "error-500-then-200":
-        raise SystemExit("name or scenarioName")
-    if stub["request"].get("method") != "GET" or stub["request"].get("urlPath") != "/api/error-500-then-200":
-        raise SystemExit("request")
-
-if first.get("requiredScenarioState") != "Started" or first.get("newScenarioState") != "Succeeded":
-    raise SystemExit("first state")
-if first["response"].get("status") != 500 or first["response"].get("bodyFileName") != "error-500.json":
-    raise SystemExit("first response")
-
-if second.get("requiredScenarioState") != "Succeeded" or "newScenarioState" in second:
-    raise SystemExit("second state")
-if second["response"].get("status") != 200 or second["response"].get("bodyFileName") != "success.json":
-    raise SystemExit("second response")
-
-for stub in (first, second):
-    if stub["response"].get("headers", {}).get("Content-Type") != "application/json":
-        raise SystemExit("content type")
-PY
-  then
+  # shellcheck disable=SC2016 # 単一引用符の中の $a、$b は jq の変数であり、シェルで展開させない。
+  if ! "$jq_bin" -e -s '
+    def base(s): s.name == "error-500-then-200" and s.scenarioName == "error-500-then-200"
+      and s.request.method == "GET" and s.request.urlPath == "/api/error-500-then-200"
+      and s.response.headers["Content-Type"] == "application/json";
+    .[0] as $a
+    | .[1] as $b
+    | base($a) and base($b)
+      and $a.requiredScenarioState == "Started" and $a.newScenarioState == "Succeeded"
+      and $a.response.status == 500 and $a.response.bodyFileName == "error-500.json"
+      and $b.requiredScenarioState == "Succeeded" and ($b | has("newScenarioState") | not)
+      and $b.response.status == 200 and $b.response.bodyFileName == "success.json"
+  ' "$_m/error-500-then-200-1.json" "$_m/error-500-then-200-2.json" >/dev/null; then
     record_fail "状態遷移の2ファイルが plan 4.2 どおり"
   fi
+}
+
+# 管理APIの mapping（JSON）から、name が一致する最初の mapping の urlPath を出す（T-R0259）。
+# 一致が無ければ空を出して成功する（旧の Python と同じ）。一致したのに urlPath が無ければ失敗する。
+# 引数: JSON のファイル、name
+mapping_urlpath_by_name() {
+  # shellcheck disable=SC2016 # 単一引用符の中の $m と $n は jq の変数であり、シェルで展開させない。
+  "$jq_bin" -r --arg n "$2" '
+    ([.mappings[] | select(.name == $n)] | first) as $m
+    | if $m == null then "" else ($m.request.urlPath // error("urlPath が無い")) end
+  ' "$1"
+}
+
+# 名前が無ければ空、一致すれば urlPath、urlPath の無い一致は失敗する（T-R0258）。
+unit_mapping_urlpath_lookup_missing_name() {
+  _f="$tmp_root/lookup-mappings.json"
+  printf '%s\n' '{"mappings":[{"name":"a","request":{"method":"GET","urlPath":"/a"}}]}' > "$_f"
+  [ "$(mapping_urlpath_by_name "$_f" a)" = "/a" ] || return 1
+  [ "$(mapping_urlpath_by_name "$_f" missing)" = "" ] || return 1
+  printf '%s\n' '{"mappings":[{"name":"b","request":{}}]}' > "$_f.bad"
+  if mapping_urlpath_by_name "$_f.bad" b >/dev/null 2>&1; then
+    return 1
+  fi
+  return 0
 }
 
 # unit は docker を呼ばず、後始末の trap も登録しない。
@@ -385,7 +394,8 @@ unit_main() {
   unit_name_undefined
   unit_name_conflict
   unit_static_check
-  check "状態遷移の2ファイル" unit_state_machine_files
+  check "error-500-then-200 の2定義が plan 4.2 どおりで一致する" unit_error_500_then_200_definitions_match
+  check "name から urlPath を引く: 無い name は空、urlPath の無い一致は失敗する" unit_mapping_urlpath_lookup_missing_name
   check "Docker を呼ばない" unit_no_docker
   check "m07_signal_exit_codes: INT は130、TERM は143" unit_signal_exit_codes
 
@@ -445,8 +455,7 @@ smoke_names_match() {
     >"$smoke_dir/mappings.json" || return 1
   for _n in $(scenario_names); do
     _want=$(scenario_path "$_n") || return 1
-    _got=$(python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); print(next((m["request"]["urlPath"] for m in d["mappings"] if m.get("name")==sys.argv[2]), ""))' \
-      "$smoke_dir/mappings.json" "$_n") || return 1
+    _got=$(mapping_urlpath_by_name "$smoke_dir/mappings.json" "$_n") || return 1
     [ "$_got" = "$_want" ] || return 1
   done
 }

@@ -152,6 +152,12 @@ gitleaks_gate() {
 }
 gitleaks_gate
 
+# jq は JSON の取り出しを行う検査より前に、版の照合だけを先頭で行う。
+# Why: 未導入や版違いを、後段の JSON の検査より前に導入手順つきで示すため。
+if ! resolve_tool jq 's/^jq-//p' --version; then
+  status=1
+fi
+
 # yq は使う側の検査（M09 の構造比較）より前に、版の照合だけを先頭で行う。
 # Why: 版違いや未導入を、後段の失敗より前に導入手順つきで示すため。
 if ! resolve_tool yq 's/.*version v//p' --version; then
