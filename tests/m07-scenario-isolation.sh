@@ -1,7 +1,7 @@
 #!/bin/sh
 # M07 の検査入口。
-# unit は scripts/scenario-lib.sh の関数とマッピングの構成を、Docker を使わずに確かめる。
-# smoke は unit に続けて、新基盤（taskdef）で WireMock と Squid を起動し、リセットと確認を実機で確かめる（T706）。
+# unit の検査は tests/bats/m07-scenario-isolation.bats にある（Docker を使わない）。
+# smoke は、まず unit（bats）を走らせ、続けて新基盤（taskdef）で WireMock と Squid を起動し、リセットと確認を実機で確かめる（T706）。
 set -eu
 
 ROOT=$(cd "$(dirname "$0")/.." && pwd)
@@ -17,7 +17,18 @@ case "$MODE" in
 esac
 
 cd "$ROOT"
-# jq の実体は、固定版を照合して得る（unit と smoke の両方が使う）。未導入や版違いは、ここで導入手順つきに止まる。
+BATS_FILE=$ROOT/tests/bats/m07-scenario-isolation.bats
+
+if [ "$MODE" = unit ]; then
+  exec sh "$ROOT/tests/lib/run-bats.sh" "$BATS_FILE" unit
+fi
+
+# smoke は unit に続けて走らせる。入れ子の子（M07_NESTED）は unit を走らせない（子が自分の unit をさらに走らせる再帰を防ぐ）。
+if [ -z "${M07_NESTED:-}" ]; then
+  sh "$ROOT/tests/lib/run-bats.sh" "$BATS_FILE" unit || exit 1
+fi
+
+# jq の実体は、固定版を照合して得る（マッピングの urlPath の取り出しに使う）。未導入や版違いは、ここで導入手順つきに止まる。
 # shellcheck source=/dev/null
 . "$ROOT/scripts/lib/resolve-tool.sh"
 resolve_tool jq 's/^jq-//p' --version || exit 1
@@ -35,57 +46,13 @@ SWSC_ROOT=$ROOT
 
 failures=0
 total=0
-# 一時ファイルは unit でも smoke でも使う。unit は docker を起動しないので、削除だけを trap で行う。
+# 一時ファイルは smoke が使う。削除だけを trap で行う。
 tmp_root=$(mktemp -d)
 trap 'rm -rf "$tmp_root"' EXIT
 
 record_fail() { # 検査名
   failures=$((failures + 1))
   printf 'FAIL: %s\n' "$1" >&2
-}
-
-# 終了コードだけを比べる。標準出力と標準エラーは捨てる。
-expect_rc() { # 検査名 期待終了コード コマンド...
-  _name=$1
-  _want=$2
-  shift 2
-  total=$((total + 1))
-  _rc=0
-  "$@" >/dev/null 2>&1 || _rc=$?
-  if [ "$_rc" -ne "$_want" ]; then
-    record_fail "$_name (期待 rc=$_want 実際 rc=$_rc)"
-  fi
-}
-
-# 標準出力と終了コードを比べる。
-expect_out() { # 検査名 期待出力 コマンド...
-  _name=$1
-  _want=$2
-  shift 2
-  total=$((total + 1))
-  _rc=0
-  _got=$("$@" 2>/dev/null) || _rc=$?
-  if [ "$_rc" -ne 0 ] || [ "$_got" != "$_want" ]; then
-    record_fail "$_name (期待 出力=[$_want] 実際 rc=$_rc 出力=[$_got])"
-  fi
-}
-
-# 終了コードと標準エラーの一部を比べる。標準エラーに期待の文字列が無ければ失敗する。
-expect_err() { # 検査名 期待終了コード 含む文字列 コマンド...
-  _name=$1
-  _want=$2
-  _needle=$3
-  shift 3
-  total=$((total + 1))
-  _rc=0
-  _err=$("$@" 2>&1 >/dev/null) || _rc=$?
-  _matched=no
-  case "$_err" in
-    *"$_needle"*) _matched=yes ;;
-  esac
-  if [ "$_rc" -ne "$_want" ] || [ "$_matched" = no ]; then
-    record_fail "$_name (期待 rc=$_want 標準エラーに[$_needle] 実際 rc=$_rc 標準エラー=[$_err])"
-  fi
 }
 
 # 検査の本体を1つ走らせ、失敗したら記録する。関数の成否を終了コードで受ける。
@@ -98,148 +65,9 @@ check() { # 検査名 コマンド...
   fi
 }
 
-# 一時ディレクトリにスタブを1件置く。内容は1行のJSONとして書く。
-put_stub() { # ディレクトリ ファイル名 JSON本文
-  mkdir -p "$1"
-  printf '%s\n' "$3" >"$1/$2"
-}
-
-# 状態を持つ2件（Started から Succeeded、続けて Succeeded）の正しいグループを置く。
-# 静的検査が正しい構成を通すことを、拒否する検査の対照として確かめる。
-G_START='"name":"g","scenarioName":"g","requiredScenarioState":"Started","newScenarioState":"Succeeded","request":{"method":"GET","urlPath":"/g"},"response":{"status":500}'
-G_DONE='"name":"g","scenarioName":"g","requiredScenarioState":"Succeeded","request":{"method":"GET","urlPath":"/g"},"response":{"status":200}'
-
-make_valid_group() { # ディレクトリ
-  put_stub "$1" start.json "{$G_START}"
-  put_stub "$1" done.json "{$G_DONE}"
-}
-
-# 静的検査が1件の不正で拒否することを確かめる。検査名と、置くスタブの組を受け取る。
-expect_static_reject() { # 検査名 ディレクトリ
-  total=$((total + 1))
-  if scenario_check_static "$2" >/dev/null 2>&1; then
-    record_fail "$1（不正な構成が通った）"
-  fi
-}
-
-# 名前の解決: 5名の宛先が M07 の表と一致する
-unit_name_resolution() {
-  expect_out "名前: normal の宛先" "/api/users/123" scenario_path normal
-  expect_out "名前: error-500-then-200 の宛先" "/api/error-500-then-200" scenario_path error-500-then-200
-  expect_out "名前: ratelimit-429 の宛先" "/api/ratelimit" scenario_path ratelimit-429
-  expect_out "名前: slow-100 の宛先" "/api/slow-100" scenario_path slow-100
-  expect_out "名前: slow-5000 の宛先" "/api/slow-5000" scenario_path slow-5000
-  # 一覧は name を持つスタブだけを返す。name を持たない 500 と 503 が混ざれば、ここで落ちる
-  expect_out "名前の一覧は5件だけ" "$(printf '%s\n' error-500-then-200 normal ratelimit-429 slow-100 slow-5000)" scenario_names
-}
-
-# 未定義と形式違反は、既定の宛先へ逃げずに終了コード2で止まる
-unit_name_undefined() {
-  expect_err "未定義の名前は終了コード2と一覧" 2 "unknown scenario: no-such" scenario_path no-such
-  expect_err "未定義の名前の標準エラーに定義済みの一覧" 2 "normal" scenario_path no-such
-  expect_rc "大文字は未定義扱い" 2 scenario_path Normal
-  expect_rc "空文字は未定義扱い" 2 scenario_path ""
-  expect_rc "アンダースコアは未定義扱い" 2 scenario_path a_b
-  expect_rc "先頭ハイフンは未定義扱い" 2 scenario_path -x
-  expect_rc "空白を含む名前は未定義扱い" 2 scenario_path "x y"
-  # 制御文字は標準エラーへ出す前に取り除く。取り除かれていなければ、期待の文字列が一致しない
-  _esc=$(printf '\033')
-  expect_err "制御文字を含む名前は取り除いて表示" 2 "unknown scenario: normal" scenario_path "nor${_esc}mal"
-}
-
-# 同じ名前で宛先が異なるスタブは、既定へ逃げず終了コード1で失敗する
-unit_name_conflict() {
-  _dir="$tmp_root/conflict"
-  put_stub "$_dir" d1.json '{"name":"dup","request":{"method":"GET","urlPath":"/d1"},"response":{"status":200}}'
-  put_stub "$_dir" d2.json '{"name":"dup","request":{"method":"GET","urlPath":"/d2"},"response":{"status":200}}'
-  expect_rc "同名で宛先が異なれば終了コード1" 1 scenario_path dup "$_dir"
-  expect_rc "同名で宛先が異なれば静的検査も拒否" 1 scenario_check_static "$_dir"
-}
-
-# 静的検査: 実マッピングは通り、6検査と名前の形式の違反はそれぞれ拒否される
-unit_static_check() {
-  check "静的検査: 実マッピングが通る" scenario_check_static wiremock-scenarios/mappings
-
-  _good="$tmp_root/good"
-  make_valid_group "$_good"
-  check "静的検査: 正しい状態グループが通る" scenario_check_static "$_good"
-  expect_out "正しい状態グループの宛先" "/g" scenario_path g "$_good"
-
-  # 状態の網羅: Started が無い、または2件ある
-  _none="$tmp_root/no-started"
-  put_stub "$_none" done.json "{$G_DONE}"
-  expect_static_reject "状態の網羅: Started が0件" "$_none"
-
-  _two="$tmp_root/two-started"
-  make_valid_group "$_two"
-  put_stub "$_two" start2.json "{$G_START}"
-  expect_static_reject "状態の網羅: Started が2件" "$_two"
-
-  # 遷移の到達性: newScenarioState が、どの requiredScenarioState にも現れない
-  _unreach="$tmp_root/unreachable"
-  put_stub "$_unreach" start.json '{"name":"g","scenarioName":"g","requiredScenarioState":"Started","newScenarioState":"Nowhere","request":{"method":"GET","urlPath":"/g"},"response":{"status":500}}'
-  put_stub "$_unreach" done.json "{$G_DONE}"
-  expect_static_reject "遷移の到達性: 遷移先が存在しない" "$_unreach"
-
-  # 宛先の一致: 同じグループで urlPath が違う
-  _dest="$tmp_root/dest-mismatch"
-  put_stub "$_dest" start.json "{$G_START}"
-  put_stub "$_dest" done.json '{"name":"g","scenarioName":"g","requiredScenarioState":"Succeeded","request":{"method":"GET","urlPath":"/other"},"response":{"status":200}}'
-  expect_static_reject "宛先の一致: グループ内で urlPath が違う" "$_dest"
-
-  # 名前の一致: 同じグループで name が違う
-  _name=$tmp_root/name-mismatch
-  put_stub "$_name" start.json "{$G_START}"
-  put_stub "$_name" done.json '{"name":"h","scenarioName":"g","requiredScenarioState":"Succeeded","request":{"method":"GET","urlPath":"/g"},"response":{"status":200}}'
-  expect_static_reject "名前の一致: グループ内で name が違う" "$_name"
-
-  # 部分指定: requiredScenarioState があるのに scenarioName が無い
-  _partial="$tmp_root/partial"
-  put_stub "$_partial" p.json '{"name":"p","requiredScenarioState":"Started","request":{"method":"GET","urlPath":"/p"},"response":{"status":200}}'
-  expect_static_reject "部分指定: scenarioName が無い状態スタブ" "$_partial"
-
-  # パスの重複: グループの外で同じ method と urlPath を持つ2件
-  _dup="$tmp_root/path-dup"
-  put_stub "$_dup" p1.json '{"name":"p1","request":{"method":"GET","urlPath":"/dup"},"response":{"status":200}}'
-  put_stub "$_dup" p2.json '{"name":"p2","request":{"method":"GET","urlPath":"/dup"},"response":{"status":200}}'
-  expect_static_reject "パスの重複: グループの外で重複" "$_dup"
-
-  # 名前の形式: 大文字を含む name
-  _format="$tmp_root/name-format"
-  put_stub "$_format" f.json '{"name":"Bad_Name","request":{"method":"GET","urlPath":"/f"},"response":{"status":200}}'
-  expect_static_reject "名前の形式: 大文字とアンダースコア" "$_format"
-}
-
-# error-500-then-200 の2定義が plan 4.2 のとおりに書かれ、互いに整合する（T-R0258、T-R0259）。
-# 旧の Python と同じ項目を jq -e で確かめる。-s で2つのファイルを配列として読む。
-unit_error_500_then_200_definitions_match() {
-  _m=wiremock-scenarios/mappings
-  if [ ! -f "$_m/error-500-then-200-1.json" ] || [ ! -f "$_m/error-500-then-200-2.json" ]; then
-    record_fail "状態遷移の2ファイルが存在する"
-    return 0
-  fi
-  total=$((total + 1))
-  # shellcheck disable=SC2016 # 単一引用符の中の $a、$b は jq の変数であり、シェルで展開させない。
-  if ! "$jq_bin" -e -s '
-    def base(s): s.name == "error-500-then-200" and s.scenarioName == "error-500-then-200"
-      and s.request.method == "GET" and s.request.urlPath == "/api/error-500-then-200"
-      and s.response.headers["Content-Type"] == "application/json";
-    .[0] as $a
-    | .[1] as $b
-    | base($a) and base($b)
-      and $a.requiredScenarioState == "Started" and $a.newScenarioState == "Succeeded"
-      and $a.response.status == 500 and $a.response.bodyFileName == "error-500.json"
-      and $b.requiredScenarioState == "Succeeded" and ($b | has("newScenarioState") | not)
-      and $b.response.status == 200 and $b.response.bodyFileName == "success.json"
-  ' "$_m/error-500-then-200-1.json" "$_m/error-500-then-200-2.json" >/dev/null; then
-    record_fail "状態遷移の2ファイルが plan 4.2 どおり"
-  fi
-}
-
-# 管理APIの mapping（JSON）から、name が一致する最初の mapping の urlPath を出す（T-R0259）。
-# 一致が無ければ空を出して成功する（旧の Python と同じ）。一致したのに urlPath が無ければ失敗する。
-# 引数: JSON のファイル、name
-mapping_urlpath_by_name() {
+# 管理APIの mapping（JSON）から、name が一致する最初の mapping の urlPath を出す（smoke の名前の照合で使う）。
+# 一致が無ければ空を出して成功する。一致したのに urlPath が無ければ失敗する。
+mapping_urlpath_by_name() { # JSON のファイル、name
   # shellcheck disable=SC2016 # 単一引用符の中の $m と $n は jq の変数であり、シェルで展開させない。
   "$jq_bin" -r --arg n "$2" '
     ([.mappings[] | select(.name == $n)] | first) as $m
@@ -247,172 +75,6 @@ mapping_urlpath_by_name() {
   ' "$1"
 }
 
-# 名前が無ければ空、一致すれば urlPath、urlPath の無い一致は失敗する（T-R0258）。
-unit_mapping_urlpath_lookup_missing_name() {
-  _f="$tmp_root/lookup-mappings.json"
-  printf '%s\n' '{"mappings":[{"name":"a","request":{"method":"GET","urlPath":"/a"}}]}' > "$_f"
-  [ "$(mapping_urlpath_by_name "$_f" a)" = "/a" ] || return 1
-  [ "$(mapping_urlpath_by_name "$_f" missing)" = "" ] || return 1
-  printf '%s\n' '{"mappings":[{"name":"b","request":{}}]}' > "$_f.bad"
-  if mapping_urlpath_by_name "$_f.bad" b >/dev/null 2>&1; then
-    return 1
-  fi
-  return 0
-}
-
-# unit は docker を呼ばず、後始末の trap も登録しない。
-# 偽の docker を PATH の先頭に置き、呼ばれたら記録する。
-# 入れ子の unit 実行では、この検査を飛ばして再帰を防ぐ（M07_NESTED）。
-unit_no_docker() {
-  if [ -n "${M07_NESTED:-}" ]; then
-    return 0
-  fi
-  _shim="$tmp_root/shim"
-  _calls="$tmp_root/calls"
-  mkdir -p "$_shim"
-  printf '#!/bin/sh\necho %s >>"%s"\nexit 99\n' docker "$_calls" >"$_shim/docker"
-  chmod +x "$_shim/docker"
-  total=$((total + 1))
-  _rc=0
-  M07_NESTED=1 PATH="$_shim:$PATH" sh "$SELF" unit >/dev/null 2>&1 || _rc=$?
-  if [ "$_rc" -ne 0 ]; then
-    # 変数の直後に全角の括弧が続くと、UTF-8 のロケールでは変数名の一部と解釈され set -u で止まる。
-    # そのため変数は波括弧で囲む。
-    record_fail "unit が Docker なしで成功する（rc=${_rc}）"
-  fi
-  if [ -e "$_calls" ]; then
-    record_fail "unit が docker を呼んだ"
-  fi
-}
-
-# 文書の追加手順: 文書の JSON 例を一時ディレクトリへ置き、解決と静的検査が通ることを確かめる。
-unit_doc_add_procedure() {
-  _tmp_dir="$tmp_root/doc-add"
-  mkdir -p "$_tmp_dir/mappings"
-  cp wiremock-scenarios/mappings/*.json "$_tmp_dir/mappings/"
-  python3 - "docs/シナリオ隔離.md" "$_tmp_dir/mappings/example-added.json" <<'PY' || return 1
-import re
-import sys
-
-doc, out = sys.argv[1], sys.argv[2]
-text = open(doc, encoding="utf-8").read()
-# 文書の最初の json のコードブロックを、追加する例として取り出す。
-match = re.search(r"```json\n(.*?)\n```", text, re.S)
-if match is None:
-    sys.exit(1)
-open(out, "w", encoding="utf-8").write(match.group(1) + "\n")
-PY
-  [ "$(scenario_path example-added "$_tmp_dir/mappings")" = "/api/example-added" ] || return 1
-  scenario_check_static "$_tmp_dir/mappings" || return 1
-  rm -rf "$_tmp_dir"
-}
-
-# 文書の内容: 並列禁止の節と4項目の語があり、識別情報のパターンがない。README から実在する文書へ辿れる。
-unit_doc_content() {
-  _doc="docs/シナリオ隔離.md"
-  grep -Fq '## 並列実行をしない理由' "$_doc" || return 1
-  for _word in 'シナリオ状態' 'リクエストジャーナル' 'リセット操作' 'ポートとコンテナ'; do
-    grep -Fq "$_word" "$_doc" || return 1
-  done
-  if grep -E '[0-9]{12}|arn:aws' "$_doc" >/dev/null; then
-    return 1
-  fi
-  grep -Fq '(docs/シナリオ隔離.md)' README.md && [ -f "$_doc" ]
-}
-
-# wiremock_verify_reset を、偽の管理API応答で実行する。curl を関数で差し替え、-o の出力先へ決め打ちのJSONを書く。
-# Why: 実機の WireMock では、Squid の内部要求が混ざる偶然を作れず、偽陽性を再現できないため。
-# Why not 本物の HTTP サーバーを立てる: ポートの取り合いと後始末が増え、判定に必要なのは応答のJSONだけのため。
-verify_with() { # リクエスト応答のJSON シナリオ応答のJSON マッピング応答のmeta.total
-  (
-    FAKE_REQ=$1
-    FAKE_SCN=$2
-    FAKE_MAP=$3
-    curl() {
-      _o=
-      _u=
-      while [ $# -gt 0 ]; do
-        case $1 in
-          -o) _o=$2; shift 2 ;;
-          -*) shift ;;
-          *) _u=$1; shift ;;
-        esac
-      done
-      case $_u in
-        */__admin/mappings) printf '{"meta":{"total":%s}}' "$FAKE_MAP" >"$_o" ;;
-        */__admin/requests) printf '%s' "$FAKE_REQ" >"$_o" ;;
-        */__admin/scenarios) printf '%s' "$FAKE_SCN" >"$_o" ;;
-        *) return 22 ;;
-      esac
-    }
-    _md=$(mktemp -d "$tmp_root/verify-map.XXXXXX")
-    printf '{}\n' >"$_md/a.json"
-    wiremock_verify_reset "$_md"
-  )
-}
-
-# Issue #23: Squid の内部要求は数えず、テストの通信と想定外の要求は数える。確認の3項目は弱めない。
-unit_verify_reset_journal() {
-  _scn_ok='{"scenarios":[{"name":"g","state":"Started"}]}'
-  _empty='{"meta":{"total":0},"requests":[]}'
-  _internal='{"meta":{"total":1},"requests":[{"request":{"url":"/squid-internal-periodic/store_digest"}}]}'
-  _api='{"meta":{"total":1},"requests":[{"request":{"url":"/api/users/123"}}]}'
-  _mixed='{"meta":{"total":2},"requests":[{"request":{"url":"/squid-internal-periodic/store_digest"}},{"request":{"url":"/api/users/123"}}]}'
-  _lookalike='{"meta":{"total":1},"requests":[{"request":{"url":"/api/squid-internal-x"}}]}'
-  _mismatch='{"meta":{"total":2},"requests":[{"request":{"url":"/squid-internal-periodic/store_digest"}}]}'
-  _nourl='{"meta":{"total":1},"requests":[{"request":{}}]}'
-  _bad_scn='{"scenarios":[{"name":"g","state":"Succeeded"}]}'
-  expect_rc "ジャーナル: 空なら通る" 0 verify_with "$_empty" "$_scn_ok" 1
-  expect_rc "ジャーナル: Squid の内部要求だけなら通る（偽陽性にならない）" 0 verify_with "$_internal" "$_scn_ok" 1
-  expect_err "ジャーナル: テストの通信が1件残れば実測1で失敗する" 1 "リクエストジャーナル件数: 期待 0 実測 1" \
-    verify_with "$_api" "$_scn_ok" 1
-  expect_err "ジャーナル: 内部要求とテストの通信が混ざれば、テストの通信だけを数える" 1 "リクエストジャーナル件数: 期待 0 実測 1" \
-    verify_with "$_mixed" "$_scn_ok" 1
-  expect_err "ジャーナル: 接頭辞でなく部分一致の URL は内部要求として除外しない" 1 "リクエストジャーナル件数: 期待 0 実測 1" \
-    verify_with "$_lookalike" "$_scn_ok" 1
-  expect_err "ジャーナル: meta.total と requests[] の件数が食い違えば数えずに失敗する" 1 "meta.total と一致しない" \
-    verify_with "$_mismatch" "$_scn_ok" 1
-  expect_err "ジャーナル: URL が読めなければ失敗する" 1 "request.url が読めない" verify_with "$_nourl" "$_scn_ok" 1
-  expect_err "確認の3項目: マッピング件数の不一致は引き続き失敗する" 1 "マッピング件数: 期待 1 実測 2" \
-    verify_with "$_empty" "$_scn_ok" 2
-  expect_err "確認の3項目: シナリオ状態が Started でなければ引き続き失敗する" 1 "シナリオ状態: g 期待 Started 実測 Succeeded" \
-    verify_with "$_internal" "$_bad_scn" 1
-}
-
-# INT と TERM の終了コード（130、143）と、子の起動の検査が本体にあることを静的に確かめる。
-# Why: 信号の実機の検査は smoke にある。取り違えは unit でも気付けるように、宣言を見ておく。
-unit_signal_exit_codes() {
-  grep -Fq "trap 'exit 130' INT" "$SELF" && grep -Fq "trap 'exit 143' TERM" "$SELF" \
-    && grep -Fq "smoke_case_signal INT 130" "$SELF" && grep -Fq "smoke_case_signal TERM 143" "$SELF"
-}
-
-unit_main() {
-  check "m07_reset_excludes_internal: 内部要求を除き、テストの通信だけを数える" unit_verify_reset_journal
-  check "文書の追加手順（JSON例が解決と静的検査を通る）" unit_doc_add_procedure
-  check "文書の内容（並列禁止の節、識別情報の不在、README のリンク）" unit_doc_content
-  unit_name_resolution
-  unit_name_undefined
-  unit_name_conflict
-  unit_static_check
-  check "error-500-then-200 の2定義が plan 4.2 どおりで一致する" unit_error_500_then_200_definitions_match
-  check "name から urlPath を引く: 無い name は空、urlPath の無い一致は失敗する" unit_mapping_urlpath_lookup_missing_name
-  check "Docker を呼ばない" unit_no_docker
-  check "m07_signal_exit_codes: INT は130、TERM は143" unit_signal_exit_codes
-
-  if [ "$failures" -ne 0 ]; then
-    printf 'M07 unit: %s of %s checks failed\n' "$failures" "$total" >&2
-    exit 1
-  fi
-  printf 'M07 scenario isolation unit passed (%s checks)\n' "$total"
-}
-
-unit_main
-
-smoke_wiremock_url=${WIREMOCK_URL:-http://127.0.0.1:8080}
-
-# WireMock と Squid を新基盤（taskdef）で起動し、リセット、対照実験、通し実行を行う（T707、plan.md 6.2）。
-# 起動、収集、停止は共通の入口（swsc_start_main、swsc_collect、swsc_stop）に任せる。
-# 後始末の trap は元の終了コードを保つ。
 smoke_wiremock_url=${WIREMOCK_URL:-http://127.0.0.1:8080}
 smoke_client_url="http://api.example.com"
 export WIREMOCK_URL="$smoke_wiremock_url"
@@ -689,11 +351,9 @@ smoke_failure_path() {
   check "TERM: 終了コード143、リセットを試み、残存と一時ファイルがない" smoke_case_signal TERM 143
 }
 
-if [ "$MODE" = smoke ]; then
-  smoke_run
-  if [ "$failures" -ne 0 ]; then
-    printf 'M07 smoke: %s of %s checks failed\n' "$failures" "$total" >&2
-    exit 1
-  fi
-  printf 'M07 scenario isolation smoke passed (%s checks)\n' "$total"
+smoke_run
+if [ "$failures" -ne 0 ]; then
+  printf 'M07 smoke: %s of %s checks failed\n' "$failures" "$total" >&2
+  exit 1
 fi
+printf 'M07 scenario isolation smoke passed (%s checks)\n' "$total"

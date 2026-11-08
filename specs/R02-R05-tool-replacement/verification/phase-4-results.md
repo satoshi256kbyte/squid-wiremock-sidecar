@@ -260,3 +260,22 @@ probe の材料は、`$KIROCREW_SCRATCH` の一時ディレクトリに作り、
   - 要確認（確認済み）: TERM で bats を止めたとき、`/tmp/bats-run-*` が残るか。
     13 章と前の確認（1.4 節）で、TERM の後に残りが無いことを確かめた。`BATS_TEST_TMPDIR` は bats が消す。
 - `run-bats.sh` の `cd` の修正の後、shellcheck（0 件）と `sh tests/m09-execution-and-ci.sh unit`（239 件中 239 件通過）を確かめた。
+
+## 15. macOS の確認（T-R0293）
+
+利用者の端末（macOS、arm64、Homebrew の mise）で実施した。
+
+- mise: 2026.11.4（`min_version` の 2026.11.3 以上を満たす）
+- `mise install --locked shellcheck actionlint gitleaks bats jq yq`: 成功（bats@1.14.0、jq@1.8.2、yq@4.54.2、gitleaks@8.30.1、actionlint@1.7.12）
+- `mise which jq` と `mise exec -- jq --version`: `jq-1.8.2`
+- `sh` が使う bash: GNU bash 3.2.57（`/bin/bash --version`）
+- `sh tests/s14-taskdef-contract.sh unit`: 5 件すべて `ok`、終了コード 0（bash 3.2）
+- `sh tests/m03-wiremock-scenarios.sh unit`: 6 件すべて `ok`、終了コード 0（bats は mise の実体を使用）
+
+注意:
+
+- 最初の確認では、手元のブランチが `main` のままで、bats の入口と `.bats` が無かった。`feature/r02-r05-tool-replacement` に切り替えて確認した。
+- `~/.tool-versions` の `awscli`、`node`、`python` は、リポジトリの lockfile に無い。これは利用者の全体設定で、リポジトリには影響しない。警告として扱う。
+- mise が `actionlint` の非推奨を警告した（`jactionlint` への移行を勧める）。リポジトリの版（1.7.12）は現状のまま。移行の判断は別の作業として扱う。
+
+結論: T-R0293 は完了。bash 3.2 での s14 と m03 の unit の動作を確かめた。T-R0294（段階2の前提）は満たされた。
