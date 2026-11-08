@@ -29,6 +29,7 @@ else
 fi
 SELF="$ROOT/tests/m08-e2e-suite.sh"
 # 新基盤の共通部品（名前の定数、Client 実行、起動、停止）。Why: 実通信は swsc_client_once_env と swsc_start_main を通すため。
+# shellcheck disable=SC2034 # 直後で読み込む scripts/e2e-lib.sh と scripts/e2e-runner.sh が SWSC_ROOT を参照する
 SWSC_ROOT=$ROOT
 # shellcheck source=/dev/null
 . "$ROOT/scripts/e2e-lib.sh"
@@ -65,10 +66,8 @@ rc_is() { # 期待終了コード コマンド...
 # Why: unit で Docker を呼ばないことを、呼び出しの記録で確かめるため。
 make_shim() { # 作業ディレクトリ
   mkdir -p "$1/shim"
-  for _cmd in docker; do
-    printf '#!/bin/sh\necho %s >>"%s"\nexit 99\n' "$_cmd" "$1/calls" >"$1/shim/$_cmd"
-    chmod +x "$1/shim/$_cmd"
-  done
+  printf '#!/bin/sh\necho %s >>"%s"\nexit 99\n' docker "$1/calls" >"$1/shim/docker"
+  chmod +x "$1/shim/docker"
 }
 
 # 4シナリオの標準出力の例。実機の entrypoint.sh が出す形と同じにする。
@@ -255,6 +254,7 @@ unit_extra_checks() {
 unit_dash_not_called() {
   _d="$WORK/dash"
   mkdir -p "$_d"
+  # shellcheck disable=SC2030 # RESULTS の変更は、この部分シェル（サブシェル）の中だけで使う隔離が意図。親の RESULTS は変えない
   ( RESULTS="$_d/results"
     scenario_expect() { printf '%s\n' 'status=200 result=success attempts=1 retries=0 wiremock=- rc=0'; }
     run_client() { canned_out normal >"$3/out"; canned_err normal >"$3/err"; return 0; }
@@ -273,6 +273,7 @@ unit_run_client_args() {
   printf '#!/bin/sh\nprintf "%%s\\n" "$@" >"%s"\nexit 28\n' "$_d/args" >"$_d/shim/docker"
   chmod +x "$_d/shim/docker"
   _rc=0
+  # shellcheck disable=SC2030 # PATH の変更は、この部分シェル（サブシェル）の中だけで使う隔離が意図。親の PATH は変えない
   ( PATH="$_d/shim:$PATH"; SWSC_E2E_DIR="$_d" run_client /api/slow-5000 RESPONSE_TIMEOUT_SECONDS=1 "$_d/out" ) || _rc=$?
   [ "$_rc" -eq 28 ] || return 1
   grep -Fxq 'TEST_API_PATH=/api/slow-5000' "$_d/args" || return 1
@@ -390,9 +391,11 @@ unit_fail_detail() {
 unit_cleanup_reset() {
   _d="$WORK/cleanup-reset"
   mkdir -p "$_d/shim"
+# shellcheck disable=SC2016 # 単一引用符の中の $FAKE_RUNNING は、偽の docker（子の sh）が展開する
   printf '#!/bin/sh\nif [ "$FAKE_RUNNING" = 1 ]; then echo true; else echo false; fi\nexit 0\n' >"$_d/shim/docker"
   chmod +x "$_d/shim/docker"
 
+# shellcheck disable=SC1090,SC2031 # $SELF を M08_LIB_ONLY=1 で関数だけ読む（自己参照のため解析しない）。PATH の変更は unit_run_client_args のサブシェルで隔離済みで、ここは親の PATH を読む
   ( M08_LIB_ONLY=1 M08_LIB_ROOT="$ROOT" . "$SELF"
     smoke_started=1
     wiremock_reset() { printf x >>"$_d/reset-running"; }
@@ -401,6 +404,7 @@ unit_cleanup_reset() {
   grep -Fxq 'cleanup: reset ok' "$_d/err-running" || return 1
   [ -e "$_d/reset-running" ] || return 1
 
+# shellcheck disable=SC1090,SC2031 # $SELF を M08_LIB_ONLY=1 で関数だけ読む（自己参照のため解析しない）。PATH の変更は unit_run_client_args のサブシェルで隔離済みで、ここは親の PATH を読む
   ( M08_LIB_ONLY=1 M08_LIB_ROOT="$ROOT" . "$SELF"
     smoke_started=1
     wiremock_reset() { printf x >>"$_d/reset-stopped"; }
@@ -409,6 +413,7 @@ unit_cleanup_reset() {
   grep -Fq 'cleanup: reset attempted' "$_d/err-stopped" && return 1
   [ ! -e "$_d/reset-stopped" ] || return 1
 
+# shellcheck disable=SC1090,SC2031 # $SELF を M08_LIB_ONLY=1 で関数だけ読む（自己参照のため解析しない）。PATH の変更は unit_run_client_args のサブシェルで隔離済みで、ここは親の PATH を読む
   ( M08_LIB_ONLY=1 M08_LIB_ROOT="$ROOT" . "$SELF"
     smoke_started=0
     wiremock_reset() { printf x >>"$_d/reset-unstarted"; }
@@ -623,6 +628,7 @@ suite_reset() {
 
 # 結果を1行で残す。区切りは | で、値には | を含まない。
 record_result() { # 名前 結果 期待値 実測値
+# shellcheck disable=SC2031 # RESULTS は呼び出し元が設定する。部分シェルで隔離した値へ追記する使い方が意図
   printf '%s|%s|%s|%s\n' "$1" "$2" "$3" "$4" >>"$RESULTS"
 }
 
@@ -662,8 +668,10 @@ run_one() { # 名前
 # Why: 続行と停止を分けるのは、リセットが外れると後続の結果が前の混入を受けるため（FR-807、FR-811）。
 run_suite() { # シナリオ名...
   if [ "$#" -eq 0 ]; then
+    # shellcheck disable=SC2086 # E2E_ORDER は行 39 の固定の文字列（空白区切りの4シナリオ名）で、語ごとに分ける意図
     set -- $E2E_ORDER
   fi
+  # shellcheck disable=SC2031 # RESULTS は呼び出し元が設定する値で、この関数では空に作り直す意図
   : >"$RESULTS"
   _stop=0
   _start=$(date +%s)
@@ -680,6 +688,7 @@ run_suite() { # シナリオ名...
     fi
   done
   _elapsed=$(( $(date +%s) - _start ))
+# shellcheck disable=SC2031 # 上の : >"$RESULTS" で作り直した同じ値を読むのが意図（部分シェルの値ではない）
   report_all "$RESULTS" "$_elapsed"
 }
 
@@ -988,6 +997,7 @@ PY
 # Why: 子の標準エラーと一時ディレクトリは、検査の後始末で消える。外れた時点で残さないと、事後に確かめられない。
 smoke_signal_diag() { # 信号名 子の終了コード 期待する終了コード 子の一時ディレクトリ
   printf 'DIAG: %s: 子の終了コード=%s 期待=%s\n' "$1" "$2" "$3" >&2
+# shellcheck disable=SC2012 # 引数の $4 は検査が mktemp -d で作った子の一時ディレクトリ。名前は診断表示にだけ使う
   printf 'DIAG: %s: 一時ディレクトリの残り=[%s] 管理対象の残存=%s件\n' "$1" \
     "$(ls -A "$4" 2>/dev/null | tr '\n' ' ')" "$(docker ps -a -q --filter "label=$SWSC_LABEL" 2>/dev/null | wc -l | tr -d ' ')" >&2
   printf 'DIAG: %s: 子の標準エラーの末尾 20 行\n' "$1" >&2

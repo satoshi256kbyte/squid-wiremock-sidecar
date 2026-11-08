@@ -21,6 +21,7 @@ cd "$ROOT"
 . "$ROOT/scripts/scenario-lib.sh"
 # 新基盤の共通部品（ロック、起動、Client 実行、停止）。読み込みに副作用はない。
 # Why: smoke が swsc_lock_enter、swsc_start_main などを使うため。
+# shellcheck disable=SC2034 # 直後で読み込む scripts/e2e-lib.sh が SWSC_ROOT を参照する
 SWSC_ROOT=$ROOT
 # shellcheck source=/dev/null
 . "$ROOT/scripts/e2e-lib.sh"
@@ -260,10 +261,8 @@ unit_no_docker() {
   _shim="$tmp_root/shim"
   _calls="$tmp_root/calls"
   mkdir -p "$_shim"
-  for _cmd in docker; do
-    printf '#!/bin/sh\necho %s >>"%s"\nexit 99\n' "$_cmd" "$_calls" >"$_shim/$_cmd"
-    chmod +x "$_shim/$_cmd"
-  done
+  printf '#!/bin/sh\necho %s >>"%s"\nexit 99\n' docker "$_calls" >"$_shim/docker"
+  chmod +x "$_shim/docker"
   total=$((total + 1))
   _rc=0
   M07_NESTED=1 PATH="$_shim:$PATH" sh "$SELF" unit >/dev/null 2>&1 || _rc=$?
@@ -656,6 +655,7 @@ PY
 # Why: 子の標準エラーと一時ディレクトリは、検査の後始末で消える。外れた時点で残さないと、事後に確かめられない。
 smoke_signal_diag() { # 信号名 子の終了コード 期待する終了コード 子の一時ディレクトリ
   printf 'DIAG: %s: 子の終了コード=%s 期待=%s\n' "$1" "$2" "$3" >&2
+# shellcheck disable=SC2012 # 引数の $4 は smoke_case_signal が mktemp -d で作った子の一時ディレクトリ。名前は診断表示にだけ使う
   printf 'DIAG: %s: 一時ディレクトリの残り=[%s] 管理対象の残存=%s件\n' "$1" \
     "$(ls -A "$4" 2>/dev/null | tr '\n' ' ')" "$(docker ps -a -q --filter "label=$SWSC_LABEL" 2>/dev/null | wc -l | tr -d ' ')" >&2
   printf 'DIAG: %s: 子の標準エラーの末尾 20 行\n' "$1" >&2

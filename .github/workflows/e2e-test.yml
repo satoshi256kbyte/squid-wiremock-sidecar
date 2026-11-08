@@ -29,6 +29,19 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+      # Why: shellcheck は mise の固定版を使う。install_args の --locked で mise.lock に従って導入する（plan 5.2）。
+      # Why: アクションはコミット SHA で固定する。sha256 は linux-x64 の取得物を検証する。
+      - uses: jdx/mise-action@b44d12e7d0d8ee7461bb893e1b1993500433185b # v5.2.7
+        with:
+          version: 2026.11.3
+          sha256: c2f7e814cb39f60b7f67a0ff36cb805e94128bf2dff09d175309d0f095b8cc3b
+          cache: false
+          env: false
+          install_args: --locked shellcheck
+      - name: shellcheck
+        # Why: 自動の導入を止める2つの環境変数は、mise which にだけ付ける。git ls-files には効かないため。
+        run: git ls-files -z '*.sh' | xargs -0 "$(MISE_EXEC_AUTO_INSTALL=false MISE_AUTO_INSTALL=false mise which shellcheck)" -s sh -S style --
+        timeout-minutes: 3
       # Why: ローカルと同じく、unit を test:ci より先に置く。unit が落ちたら Docker は動かさない（FR-914）。
       - name: unit
         run: sh tests/m09-execution-and-ci.sh unit

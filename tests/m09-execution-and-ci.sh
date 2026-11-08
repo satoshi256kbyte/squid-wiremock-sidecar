@@ -171,6 +171,7 @@ t_test_ci_unknown_scenario_exits_2_before_docker() {
 t_test_ci_scenarios_returns_child_rc_and_releases_lock() {
   entry_setup || return 1
   _rc=0
+  # shellcheck disable=SC2016 # 単一引用符の中の変数は、lib_call（env -i で起動した子の sh の eval）で展開する。親のシェルでは展開させない意図。 $SWSC_LOCK_HELD と $SWSC_TEST_SEQ は子の関数内で使う。
   lib_call 'swsc_test_ci_scenarios_child() { [ "$SWSC_LOCK_HELD" = 1 ] && [ -d "$SWSC_LOCK_DIR" ] && echo "child $*" >>"$SWSC_TEST_SEQ"; return 3; }
 swsc_test_ci_scenarios normal slow-5000' >/dev/null 2>&1 || _rc=$?
   must [ "$_rc" -eq 3 ]
@@ -182,6 +183,7 @@ swsc_test_ci_scenarios normal slow-5000' >/dev/null 2>&1 || _rc=$?
 t_test_ci_scenarios_term_stops_child_and_releases_lock() {
   entry_setup || return 1
   _rc=0
+  # shellcheck disable=SC2016 # 単一引用符の中の変数は、lib_call（env -i で起動した子の sh の eval）で展開する。親のシェルでは展開させない意図。 trap の中の $SWSC_TEST_SEQ と $SWSC_LOCK_DIR は、子の sh が trap を実行するときに展開する。
   lib_call 'swsc_test_ci_scenarios_child() {
   trap '"'"'echo child-term >>"$SWSC_TEST_SEQ"; [ -d "$SWSC_LOCK_DIR" ] && echo lock-held >>"$SWSC_TEST_SEQ"; exit 143'"'"' TERM
   echo child-start >>"$SWSC_TEST_SEQ"
@@ -267,6 +269,7 @@ fr920_hits() { # ファイル...
 t_fr920_detector_catches_command_forms() {
   printf 'docker compose up -d\n' >"$TMP/a.sh"
   printf 'true && docker-compose up\n' >"$TMP/b.sh"
+  # shellcheck disable=SC2016 # 書き出すスクリプトの本文として $( ) を文字通り書く。fr920_hits がこの形を検出するかを確かめるため、ここでは展開させない。
   printf 'x=$(docker compose ps)\n' >"$TMP/c.sh"
   printf '    run: docker-compose down\n' >"$TMP/d.yml"
   for _f in a.sh b.sh c.sh d.yml; do
@@ -281,12 +284,13 @@ t_fr920_detector_allows_comments_and_words() {
 
 t_fr920_holds_for_m09_files() {
   _files=$(cd "$ROOT" && ls scripts/e2e*.sh ecs/*/* ecs/*.json .github/workflows/e2e-test.yml package.json 2>/dev/null || true)
-  _list=
+  # Why: 対象のパスは位置引数に1つずつ積む。$ROOT に空白があっても、1つのパスが分かれないようにするため（SC2086）。
+  set --
   for _f in $_files; do
-    _list="$_list $ROOT/$_f"
+    set -- "$@" "$ROOT/$_f"
   done
-  must [ -n "$_list" ]
-  must [ -z "$(fr920_hits $_list)" ]
+  must [ "$#" -gt 0 ]
+  must [ -z "$(fr920_hits "$@")" ]
 }
 
 t_prereq_for_smoke_has_no_port_check() {
@@ -593,6 +597,7 @@ t_derive_direct_ignores_mock_destination() {
 }
 
 t_derive_mock_rejects_host_injection() {
+  # shellcheck disable=SC2016 # for の値は検査の入力値。'x$(id)' はコマンド置換させず文字列のまま渡し、derive が拒否することを確かめるため、展開させない。
   for _h in 'a;b' 'a b' 'x$(id)' 'a/b' '' "$(printf 'a\nb')"; do
     _r=0
     derive mock "$TMP/d.conf" "" "$_h" 8080 >/dev/null 2>&1 || _r=$?
@@ -691,12 +696,14 @@ t_entrypoint_stops_before_squid_when_upstream_invalid() {
 }
 
 t_squid_context_is_a_byte_copy_of_sources() {
+  # shellcheck disable=SC2030 # SWSC_ROOT は、このサブシェルの中だけで設定し、e2e-lib.sh と swsc_stage_squid_context が読む値にする。親の SWSC_ROOT は変えない。
   ( SWSC_ROOT=$ROOT; . "$ROOT/scripts/e2e-lib.sh"; swsc_stage_squid_context "$TMP/ctx" ) || return 1
   must cmp "$TMP/ctx/squid.conf" "$ROOT/squid-config/squid.conf"
   must cmp "$TMP/ctx/whitelist.txt" "$ROOT/squid-config/whitelist.txt"
   must cmp "$TMP/ctx/Dockerfile" "$ROOT/ecs/squid/Dockerfile"
   must cmp "$TMP/ctx/derive-config.sh" "$ROOT/ecs/squid/derive-config.sh"
   must cmp "$TMP/ctx/entrypoint.sh" "$ROOT/ecs/squid/entrypoint.sh"
+  # shellcheck disable=SC2012 # $TMP/ctx は swsc_stage_squid_context が固定の5ファイル（squid.conf など、英数字と . - のみ）を書き出すディレクトリで、件数の確認に ls を使ってよい。
   must [ "$(ls "$TMP/ctx" | wc -l | tr -d ' ')" -eq 5 ]
 }
 
@@ -782,6 +789,7 @@ contract_setup() {
 # 契約検証の本体を、偽のPATHと偽のダミー認証情報で評価する。
 # Why: 実際の docker と aws に触れず、利用者の AWS 設定を混ぜないため。出力先も一時領域へ向ける。
 contract_run() { # 本体
+  # shellcheck disable=SC2016 # 単一引用符の中の変数は、子の sh が環境変数から展開する。親のシェルでは展開させない意図。 子の sh が SWSC_ROOT から e2e-lib.sh と e2e-contract.sh を読み、eval で与えた文を評価する。
   env -i PATH="$TMP/cfake:$TMP/cbase" HOME="$TMP" SWSC_ROOT="$ROOT" SWSC_E2E_DIR="$TMP/e2e" \
     SWSC_LOCK_DIR="$UNIT_LOCK" SWSC_LOG_DIR="$TMP/logs" \
     SWSC_TEST_DIR="$TMP" SWSC_TEST_SEQ="$TMP/seq.log" SWSC_CONTRACT_WAIT_SECONDS=1 \
@@ -840,17 +848,21 @@ compare_mismatch() { # Python の文 [出てはいけない文字列]
   fi
 }
 
+# shellcheck disable=SC2016 # 関数定義の文字列。$SWSC_TEST_SEQ は、contract_go の子の sh で関数を実行するときに展開する。親では展開させない意図。
 CONTRACT_FREE='swsc_port_in_use() { echo "port" >>"$SWSC_TEST_SEQ"; return 1; }'
+# shellcheck disable=SC2016 # 関数定義の文字列。$SWSC_TEST_SEQ は、contract_go の子の sh で関数を実行するときに展開する。親では展開させない意図。
 COLLECT_DEF='swsc_collect() { echo "collect" >>"$SWSC_TEST_SEQ"; }'
 
 t_swsc_aws_refuses_missing_or_non_dummy_credentials() {
   contract_fakes "$TMP/cfake"
   make_base_bin "$TMP/cbase"
   _rc=0
+  # shellcheck disable=SC2016 # 単一引用符の中の変数は、子の sh が環境変数から展開する。親のシェルでは展開させない意図。 子の sh が SWSC_ROOT から e2e-lib.sh を読む。
   env -i PATH="$TMP/cfake:$TMP/cbase" HOME="$TMP" SWSC_ROOT="$ROOT" SWSC_TEST_DIR="$TMP" SWSC_TEST_SEQ="$TMP/seq.log" \
     sh -c '. "$SWSC_ROOT/scripts/e2e-lib.sh"; swsc_aws ecs list-task-definitions' >/dev/null 2>&1 || _rc=$?
   must [ "$_rc" -eq 1 ]
   _rc=0
+  # shellcheck disable=SC2016 # 単一引用符の中の変数は、子の sh が環境変数から展開する。親のシェルでは展開させない意図。 子の sh が SWSC_ROOT から e2e-lib.sh を読む。
   env -i PATH="$TMP/cfake:$TMP/cbase" HOME="$TMP" SWSC_ROOT="$ROOT" SWSC_TEST_DIR="$TMP" SWSC_TEST_SEQ="$TMP/seq.log" \
     AWS_ACCESS_KEY_ID=test AWS_SECRET_ACCESS_KEY=other \
     sh -c '. "$SWSC_ROOT/scripts/e2e-lib.sh"; swsc_aws ecs list-task-definitions' >/dev/null 2>&1 || _rc=$?
@@ -861,6 +873,7 @@ t_swsc_aws_refuses_missing_or_non_dummy_credentials() {
 t_swsc_aws_passes_endpoint_region_and_clears_config_sources() {
   contract_fakes "$TMP/cfake"
   make_base_bin "$TMP/cbase"
+  # shellcheck disable=SC2016 # 単一引用符の中の変数は、子の sh が環境変数から展開する。親のシェルでは展開させない意図。 子の sh が SWSC_ROOT から e2e-lib.sh を読む。
   env -i PATH="$TMP/cfake:$TMP/cbase" HOME="$TMP" SWSC_ROOT="$ROOT" SWSC_TEST_DIR="$TMP" SWSC_TEST_SEQ="$TMP/seq.log" \
     AWS_ACCESS_KEY_ID=test AWS_SECRET_ACCESS_KEY=test \
     sh -c '. "$SWSC_ROOT/scripts/e2e-lib.sh"; swsc_aws ecs list-task-definitions' >/dev/null 2>&1
@@ -1201,6 +1214,7 @@ runner_setup() {
 # 偽のPATHで、ランナーを読み込んだ子シェルに本体を評価させる。
 # Why: 実際の docker と curl に触れず、利用者の AWS 設定や環境変数を検査に混ぜないため。
 runner_run() { # 本体
+  # shellcheck disable=SC2016 # 単一引用符の中の変数は、子の sh が環境変数から展開する。親のシェルでは展開させない意図。 子の sh が SWSC_ROOT から e2e-lib.sh と e2e-runner.sh を読み、eval で与えた文を評価する。
   env -i PATH="$TMP/rfake:$TMP/rbase" HOME="$TMP" SWSC_ROOT="$ROOT" SWSC_TEST_DIR="$TMP" SWSC_LOCK_DIR="$UNIT_LOCK" \
     SWSC_TEST_SEQ="$TMP/seq.log" SWSC_WAIT_SECONDS=2 \
     sh -c '. "$SWSC_ROOT/scripts/e2e-lib.sh"; . "$SWSC_ROOT/scripts/e2e-runner.sh"; eval "$1"' sh "$1"
@@ -1544,12 +1558,14 @@ entry_run() { # 操作...
 
 # e2e-lib.sh と e2e-runner.sh を読み込んだ子シェルで、与えた文を評価する。関数の差し替えに使う。
 lib_call() { # 文
+  # shellcheck disable=SC2016 # 単一引用符の中の変数は、子の sh が環境変数から展開する。親のシェルでは展開させない意図。 子の sh が SWSC_ROOT から e2e-lib.sh と e2e-runner.sh を読み、eval で与えた文を評価する。
   env -i PATH="$TMP/efake:$TMP/ebase" HOME="$TMP" SWSC_ROOT="$ROOT" SWSC_LOCK_DIR="$UNIT_LOCK" SWSC_E2E_DIR="$TMP/e2e" \
     SWSC_LOG_DIR="$TMP/logs" SWSC_TEST_DIR="$TMP" SWSC_TEST_SEQ="$TMP/seq.log" SWSC_WAIT_SECONDS=2 \
     sh -c '. "$SWSC_ROOT/scripts/e2e-lib.sh"; . "$SWSC_ROOT/scripts/e2e-runner.sh"; eval "$1"' sh "$1"
 }
 
 # 偽の順序の記録（start、test、collect、stop）。戻り値は置き場のファイルで切り替える。
+# shellcheck disable=SC2016 # 偽の関数定義の文字列。$SWSC_TEST_SEQ などは、lib_call の子の sh で関数を実行するときに展開する。親では展開させない意図。
 CI_FAKES='swsc_start_main() { echo start >>"$SWSC_TEST_SEQ"; return "$(cat "$SWSC_TEST_DIR/rc-start" 2>/dev/null || echo 0)"; }
 swsc_test_run() { echo test >>"$SWSC_TEST_SEQ"; return "$(cat "$SWSC_TEST_DIR/rc-test" 2>/dev/null || echo 0)"; }
 swsc_collect() { echo collect >>"$SWSC_TEST_SEQ"; return "$(cat "$SWSC_TEST_DIR/rc-collect" 2>/dev/null || echo 0)"; }
@@ -1605,6 +1621,7 @@ t_all_operations_never_call_docker_compose() {
 t_start_checks_port_after_own_stop_and_before_build() {
   entry_setup || return 1
   _r=0
+  # shellcheck disable=SC2016 # 単一引用符の中の変数は、lib_call（env -i で起動した子の sh の eval）で展開する。親のシェルでは展開させない意図。
   lib_call 'swsc_port_in_use() { echo port >>"$SWSC_TEST_SEQ"; return 0; }; swsc_start_main' \
     >/dev/null 2>"$TMP/err" || _r=$?
   must [ "$_r" -eq 1 ]
@@ -1785,6 +1802,7 @@ t_test_ci_start_failure_collects_then_stops_and_keeps_rc() {
 t_test_ci_signal_during_collect_still_stops() {
   entry_setup || return 1
   _rc=0
+  # shellcheck disable=SC2016 # 単一引用符の中の変数と $$ は、lib_call の子の sh で展開する。$$ は子の sh の PID で、子へシグナルを送るための意図。親の PID にはしない。
   lib_call "$CI_FAKES; "'swsc_collect() { echo collect >>"$SWSC_TEST_SEQ"; if [ ! -f "$SWSC_TEST_DIR/sig-sent" ]; then : >"$SWSC_TEST_DIR/sig-sent"; kill -TERM $$; fi; return 0; }; swsc_test_ci_main' \
     >/dev/null 2>&1 || _rc=$?
   must [ "$_rc" -eq 143 ]
@@ -1812,6 +1830,7 @@ t_test_ci_collect_failure_does_not_change_rc() {
 t_test_ci_interrupt_exits_130_and_still_collects_and_stops() {
   entry_setup || return 1
   _rc=0
+  # shellcheck disable=SC2016 # 単一引用符の中の変数と $$ は、lib_call の子の sh で展開する。$$ は子の sh の PID で、子へシグナルを送るための意図。親の PID にはしない。
   lib_call 'swsc_start_main() { echo start >>"$SWSC_TEST_SEQ"; kill -INT $$; return 0; }
 swsc_collect() { echo collect >>"$SWSC_TEST_SEQ"; }
 swsc_stop() { echo stop >>"$SWSC_TEST_SEQ"; }
@@ -1823,6 +1842,7 @@ swsc_test_ci_main' >/dev/null 2>&1 || _rc=$?
 t_test_ci_terminate_exits_143_and_still_collects_and_stops() {
   entry_setup || return 1
   _rc=0
+  # shellcheck disable=SC2016 # 単一引用符の中の変数と $$ は、lib_call の子の sh で展開する。$$ は子の sh の PID で、子へシグナルを送るための意図。親の PID にはしない。
   lib_call 'swsc_start_main() { echo start >>"$SWSC_TEST_SEQ"; kill -TERM $$; return 0; }
 swsc_collect() { echo collect >>"$SWSC_TEST_SEQ"; }
 swsc_stop() { echo stop >>"$SWSC_TEST_SEQ"; }
@@ -1866,6 +1886,7 @@ t_test_op_failure_keeps_environment() {
 t_test_op_interrupt_stops_and_exits_130() {
   entry_setup || return 1
   _rc=0
+  # shellcheck disable=SC2016 # 単一引用符の中の変数と $$ は、lib_call の子の sh で展開する。$$ は子の sh の PID で、子へシグナルを送るための意図。親の PID にはしない。
   lib_call 'swsc_test_run() { echo test >>"$SWSC_TEST_SEQ"; kill -INT $$; return 0; }
 swsc_stop() { echo stop >>"$SWSC_TEST_SEQ"; }
 swsc_test_op' >/dev/null 2>&1 || _rc=$?
@@ -2036,6 +2057,7 @@ t_contract_registers_c1_to_c6_in_order() {
 # smoke は unit を、Docker を呼ぶ前に実行する。Why: unit が落ちたらDockerを起動しないため（tasks T914）。
 t_smoke_runs_unit_before_docker() {
   _f=$ROOT/tests/m09-execution-and-ci.sh
+  # shellcheck disable=SC2016 # grep の検索語。検査ファイル内の行をそのまま探すため、$ROOT と引用符を展開させない。
   _u=$(grep -n '^  if ! sh "$ROOT/tests/m09-execution-and-ci.sh" unit' "$_f" | head -n 1 | cut -d: -f1)
   _d=$(grep -n '^  # Why: swsc- の残りを消してから' "$_f" | head -n 1 | cut -d: -f1)
   [ -n "$_u" ] && [ -n "$_d" ] && [ "$_u" -lt "$_d" ]
@@ -2333,6 +2355,7 @@ smoke_7() {
     echo 'start が占有中に成功した'
     return 1
   }
+  # shellcheck disable=SC2015 # 意図どおり。2つの grep のどちらかが失敗したら { } で理由を出して失敗させる。A が成功して B が失敗した場合も { } に入る必要がある。
   grep -q 'swsc- 以外' "$TMP/s7.out" && grep -q '旧基盤' "$TMP/s7.out" || {
     cat "$TMP/s7.out" >&2
     echo '止まった理由に「swsc- 以外」と「旧基盤」が無い'
@@ -2393,6 +2416,7 @@ smoke_11() {
     cp -R "$ROOT/$_d" "$_sb/" || return 1
   done
   cp "$ROOT/Dockerfile.test-client" "$_sb/" || return 1
+  # shellcheck disable=SC2016 # sed の式。e2e-lib.sh 内の文字列 $SWSC_LOCAL_SQUID_IMAGE を一致させるため、展開させない。
   sed 's/\$SWSC_LOCAL_SQUID_IMAGE" local mock /$SWSC_LOCAL_SQUID_IMAGE" local bogus /' \
     "$_sb/scripts/e2e-lib.sh" >"$_sb/e2e-lib.tmp" || return 1
   mv "$_sb/e2e-lib.tmp" "$_sb/scripts/e2e-lib.sh" || return 1
@@ -2641,6 +2665,24 @@ t_wf_file_exists() {
   [ -f "$WF" ]
 }
 
+# T2631: shellcheck の設定（.shellcheckrc）と mise の設定（mise.toml）を、必要な行だけに制限する。
+# Why: 設定に disable や [tasks]、[hooks]、[env] があると、検査の緩みや任意の実行を、レビューなしに持ち込めるため。
+t_shellcheck_config_and_mise_toml_are_restricted() {
+  _rc=$ROOT/.shellcheckrc
+  _mt=$ROOT/mise.toml
+  # .shellcheckrc は4行だけで、disable= を持たない。
+  must [ "$(grep -c . "$_rc" || true)" -eq 4 ]
+  must [ "$(grep -c 'disable=' "$_rc" || true)" -eq 0 ]
+  # mise.toml は min_version と [tools] の shellcheck の3行だけで、テーブルは [tools] の1つだけ。
+  must [ "$(grep -cvE '^(#|$)' "$_mt" || true)" -eq 3 ]
+  must grep -qxF 'min_version = "2026.11.3"' "$_mt"
+  must [ "$(grep -c '^\[' "$_mt" || true)" -eq 1 ]
+  must grep -qxF '[tools]' "$_mt"
+  must grep -qxF 'shellcheck = "0.11.0"' "$_mt"
+  # [env]、[hooks]、[tasks]、[plugins] は書かない。
+  must [ "$(grep -cE '^\[(env|hooks|tasks|plugins)\]' "$_mt" || true)" -eq 0 ]
+}
+
 t_wf_triggers_are_pull_request_and_main_push_only() {
   # pull_request は全ブランチ向けでフィルタ無し。push は main のみ。パスの絞り込みは無い（FR-913）。
   [ "$(wf_top_block on)" = "$(printf '  pull_request:\n  push:\n    branches: [main]')" ]
@@ -2654,8 +2696,9 @@ t_wf_job_runs_on_ubuntu_2404_with_15_minute_limit() {
   wf_has_line '    runs-on: ubuntu-24.04' && wf_has_line '    timeout-minutes: 15'
 }
 
-t_wf_step_timeouts_are_unit3_test_ci10_smoke8_contract5() {
-  [ "$(wf_step_timeout unit)" = 3 ] && [ "$(wf_step_timeout test-ci)" = 10 ] \
+t_wf_step_timeouts_are_shellcheck3_unit3_test_ci10_smoke8_contract5() {
+  [ "$(wf_step_timeout shellcheck)" = 3 ] && [ "$(wf_step_timeout unit)" = 3 ] \
+    && [ "$(wf_step_timeout test-ci)" = 10 ] \
     && [ "$(wf_step_timeout smoke)" = 8 ] && [ "$(wf_step_timeout contract)" = 5 ]
 }
 
@@ -2666,7 +2709,9 @@ t_wf_dummy_credentials_are_workflow_env_only() {
 }
 
 t_wf_concurrency_groups_pr_by_ref_and_pushes_by_sha() {
+  # shellcheck disable=SC2016 # ワークフローの YAML の値として ${{ }} を文字どおり比べる。GitHub Actions の式を展開させない意図。
   _g='  group: ${{ github.workflow }}-${{ github.event_name == '"'"'pull_request'"'"' && github.ref || github.sha }}'
+  # shellcheck disable=SC2016 # ワークフローの YAML の値として ${{ }} を文字どおり比べる。GitHub Actions の式を展開させない意図。
   _c='  cancel-in-progress: ${{ github.event_name == '"'"'pull_request'"'"' }}'
   [ "$(wf_top_block concurrency)" = "$(printf '%s\n%s' "$_g" "$_c")" ]
 }
@@ -2679,6 +2724,7 @@ t_wf_collect_always_upload_on_failure_stop_always() {
 
 t_wf_uploads_logs_with_fixed_name_path_and_seven_day_retention() {
   _b=$(wf_block 'uses: actions/upload-artifact@')
+  # shellcheck disable=SC2016 # ワークフローの YAML の行として ${{ }} を文字どおり一致させる。GitHub Actions の式を展開させない意図。
   printf '%s\n' "$_b" | grep -qxF '          name: e2e-logs-${{ github.run_id }}-${{ github.run_attempt }}' || return 1
   printf '%s\n' "$_b" | grep -qxF '          path: e2e-logs/' || return 1
   printf '%s\n' "$_b" | grep -qxF '          retention-days: 7'
@@ -2698,10 +2744,11 @@ t_wf_expressions_only_in_concurrency_and_artifact_name() {
   [ -z "$(grep -n '[$][{][{]' "$WF" | grep -vE 'group:|cancel-in-progress:|name: e2e-logs-' || true)" ]
 }
 
-t_wf_uses_only_checkout_and_upload_artifact() {
-  [ "$(grep -cE '^[[:space:]]*(- )?uses:' "$WF" || true)" -eq 2 ] || return 1
+t_wf_uses_checkout_mise_action_and_upload_artifact() {
+  [ "$(grep -cE '^[[:space:]]*(- )?uses:' "$WF" || true)" -eq 3 ] || return 1
   # Why: タグ（@v7）は付け替えられる。40桁のコミット SHA で固定されていることを確かめる（security-review の Low）。
   grep -qE '^      - uses: actions/checkout@[0-9a-f]{40} # v[0-9]+' "$WF" || return 1
+  grep -qE '^      - uses: jdx/mise-action@[0-9a-f]{40} # v[0-9]+' "$WF" || return 1
   grep -qE '^      - uses: actions/upload-artifact@[0-9a-f]{40} # v[0-9]+' "$WF"
 }
 
@@ -2713,12 +2760,21 @@ t_wf_steps_run_in_plan_order() {
   _got=$(grep -E '^      - (name|uses): ' "$WF" | sed -E \
     -e 's/^      - name: //' \
     -e 's#^      - uses: actions/checkout@.*#checkout#' \
+    -e 's#^      - uses: jdx/mise-action@.*#mise-action#' \
     -e 's#^      - uses: actions/upload-artifact@.*#upload-artifact#')
-  _want=$(printf 'checkout\nunit\ntest-ci\nsmoke\ncontract\ncollect\nupload-artifact\nstop')
+  _want=$(printf 'checkout\nmise-action\nshellcheck\nunit\ntest-ci\nsmoke\ncontract\ncollect\nupload-artifact\nstop')
   [ "$_got" = "$_want" ]
 }
 
 t_wf_each_step_runs_its_command() {
+  # 静的解析の step は mise which の実体で、自動の導入を止める2つの環境変数を付けて、-s sh -S style で動かす。
+  _sc=$(wf_block '- name: shellcheck$' | grep '^        run: ') || return 1
+  printf '%s\n' "$_sc" | grep -Fq 'mise which shellcheck' || return 1
+  printf '%s\n' "$_sc" | grep -Fq 'MISE_EXEC_AUTO_INSTALL=false' || return 1
+  printf '%s\n' "$_sc" | grep -Fq 'MISE_AUTO_INSTALL=false' || return 1
+  printf '%s\n' "$_sc" | grep -Fq -- '-s sh -S style' || return 1
+  # mise-action の step は install_args で --locked を渡し、導入を mise.lock に従わせる。
+  wf_block 'uses: jdx/mise-action@' | grep -qE '^          install_args: .*--locked' || return 1
   wf_block '- name: unit$' | grep -qxF '        run: sh tests/m09-execution-and-ci.sh unit' || return 1
   wf_block '- name: test-ci$' | grep -qxF '        run: npm run test:ci && sh scripts/e2e.sh test:ci normal error-500-then-200 ratelimit-429 slow-5000' || return 1
   wf_block '- name: smoke$' | grep -qxF '        run: sh tests/m09-execution-and-ci.sh smoke' || return 1
@@ -2733,7 +2789,7 @@ t_ci_test_ci_scenarios() {
   # 既存の test:ci が先、4シナリオの test:ci が後。失敗したら後は動かない（&&）。
   printf '%s\n' "$_b" | grep -qxF '        run: npm run test:ci && sh scripts/e2e.sh test:ci normal error-500-then-200 ratelimit-429 slow-5000' || return 1
   # 専用の step を増やしていないこと。名前付きの step は計画どおり6件（checkout と upload は uses で数えない）。
-  [ "$(grep -cE '^      - name: ' "$WF")" -eq 6 ] || return 1
+  [ "$(grep -cE '^      - name: ' "$WF")" -eq 7 ] || return 1
   # job 名と required status check の名前（e2e、既存の step 名）は変わらない。
   wf_has_line '  e2e:' && wf_has_line '      - name: smoke' && wf_has_line '      - name: contract'
 }
@@ -2753,7 +2809,7 @@ job = d["jobs"]["e2e"]
 names = [s.get("name") or s.get("uses", "") for s in job["steps"]]
 ok = job["runs-on"] == "ubuntu-24.04" and job["timeout-minutes"] == 15 \
     and d["permissions"] == {"contents": "read"} and "pull_request" in on \
-    and on.get("push") == {"branches": ["main"]} and len(names) == 8
+    and on.get("push") == {"branches": ["main"]} and len(names) == 10
 sys.exit(0 if ok else 1)
 ' "$WF"
 }
@@ -2900,6 +2956,33 @@ gate_m09_block() {
   awk -v s="$_gif" 'NR >= s { print } NR > s && /^fi$/ { exit }' "$_gf"
 }
 
+# T2631: 品質ゲートの shellcheck は、mise which の実体を、版を比べて、自動の導入を止めて実行する。
+# Why: PATH 上の別の shellcheck や、mise exec による導入に頼ると、ゲートの結果が環境で変わるため。
+t_gate_runs_shellcheck_with_pinned_options() {
+  _gf=$ROOT/scripts/quality-gate.sh
+  _which=$(grep 'mise which shellcheck' "$_gf" || true)
+  must [ -n "$_which" ]
+  printf '%s\n' "$_which" | grep -Fq 'MISE_EXEC_AUTO_INSTALL=false' || return 1
+  printf '%s\n' "$_which" | grep -Fq 'MISE_AUTO_INSTALL=false' || return 1
+  printf '%s\n' "$_which" | grep -Fq 'MISE_LOCKED=1' || return 1
+  grep -Fq -- '--version' "$_gf" || return 1
+  grep -Fq -- '-s sh -S style' "$_gf" || return 1
+  # mise current も、同じ3つの環境変数で自動導入を止めて呼ぶ。
+  _cur=$(grep -F 'mise current shellcheck' "$_gf" || true)
+  must [ -n "$_cur" ]
+  printf '%s\n' "$_cur" | grep -Fq 'MISE_EXEC_AUTO_INSTALL=false' || return 1
+  printf '%s\n' "$_cur" | grep -Fq 'MISE_AUTO_INSTALL=false' || return 1
+  printf '%s\n' "$_cur" | grep -Fq 'MISE_LOCKED=1' || return 1
+  # 自動導入の停止と版の不一致の各ガードは、FAILED: の文言を持つ。
+  [ "$(grep -c 'FAILED:' "$_gf" || true)" -ge 2 ] || return 1
+  # 検査対象は、ファイルの一覧を NUL 区切りで xargs に渡す。
+  # shellcheck disable=SC2016 # 単一引用符の中の $actual_path は、検査対象のファイルの文字列として一致させる。展開させない意図。
+  grep -Fq -- 'xargs -0 "$actual_path"' "$_gf" || return 1
+  # sh -n の loop は shellcheck に置き換えたため残さない。mise exec は使わない。
+  [ "$(grep -cF 'sh -n' "$_gf" || true)" -eq 0 ] || return 1
+  [ "$(grep -cF 'mise exec' "$_gf" || true)" -eq 0 ]
+}
+
 t_gate_m09_block_exists_and_is_closed() {
   _blk=$(gate_m09_block) || return 1
   gate_has "$_blk" 'run sh tests/m09-execution-and-ci.sh unit' || return 1
@@ -2928,6 +3011,7 @@ t_gate_m09_block_placed_after_integration_check_and_before_summary() {
   _gf=$ROOT/scripts/quality-gate.sh
   _m08=$(grep -n "managed_check '統合テストの後" "$_gf" | cut -d: -f1)
   _gif=$(grep -n "^if has_match '.*scripts/e2e" "$_gf" | cut -d: -f1)
+  # shellcheck disable=SC2016 # grep の正規表現として \$status を文字どおり一致させる。品質ゲートの行の $status を探す意図。
   _sum=$(grep -n '^if \[ "\$status" -eq 0 \]' "$_gf" | cut -d: -f1)
   must [ -n "$_m08" ]
   must [ -n "$_gif" ]
@@ -2966,6 +3050,7 @@ t_managed_resource_check_failure() {
   touch "$TMP/docker-fail"
   _fn=$(awk '/^managed_check\(\) \{/{f = 1} f {print} f && /^}/ {exit}' "$ROOT/scripts/quality-gate.sh")
   must [ -n "$_fn" ]
+  # shellcheck disable=SC2016 # 単一引用符の中の $REPO_ROOT、$status、$repo_root は、env -i で起動した子の sh が展開する。親のシェルでは展開させない意図。
   _out=$(env -i PATH="$TMP/mbin:$TMP/mbase" HOME="$TMP" SWSC_ROOT="$ROOT" SWSC_TEST_DIR="$TMP" \
     REPO_ROOT="$ROOT" sh -c 'repo_root=$REPO_ROOT; status=0; '"$_fn"'; managed_check 試験 2>/dev/null; echo "$status"') || return 1
   must [ "$_out" = 1 ]
@@ -2975,6 +3060,7 @@ t_managed_resource_check_passes_when_empty_in_gate() {
   managed_setup || return 1
   _fn=$(awk '/^managed_check\(\) \{/{f = 1} f {print} f && /^}/ {exit}' "$ROOT/scripts/quality-gate.sh")
   must [ -n "$_fn" ]
+  # shellcheck disable=SC2016 # 単一引用符の中の $REPO_ROOT、$status、$repo_root は、env -i で起動した子の sh が展開する。親のシェルでは展開させない意図。
   _out=$(env -i PATH="$TMP/mbin:$TMP/mbase" HOME="$TMP" SWSC_ROOT="$ROOT" SWSC_TEST_DIR="$TMP" \
     REPO_ROOT="$ROOT" sh -c 'repo_root=$REPO_ROOT; status=0; '"$_fn"'; managed_check 試験 2>/dev/null; echo "$status"') || return 1
   must [ "$_out" = 0 ]
@@ -3028,13 +3114,16 @@ t_lock_acquire_busy() {
   _d=$(lock_case_dir) || return 1
   _lock=$_d/ports.lock
   ( SWSC_LOCK_DIR=$_lock; . "$ROOT/scripts/e2e-lib.sh"; swsc_lock_acquire ) || return 1
+  # shellcheck disable=SC2031 # _lock は本関数の冒頭で親のシェルが代入する。サブシェルは SWSC_LOCK_DIR に値を渡すだけで _lock を変えない。ここで読むのは親の値。
   must grep -Fxq "$$" "$_lock/owner"
+  # shellcheck disable=SC2031 # _lock は本関数の冒頭で親のシェルが代入する。サブシェルは SWSC_LOCK_DIR に値を渡すだけで _lock を変えない。ここで読むのは親の値。
   if ( SWSC_LOCK_DIR=$_lock; . "$ROOT/scripts/e2e-lib.sh"; swsc_lock_acquire ) 2>"$TMP/busy.err"; then
     return 1
   fi
   must grep -Fq 'ls -ld' "$TMP/busy.err"
   must grep -Fq 'rmdir' "$TMP/busy.err"
   must grep -Fq "$$" "$TMP/busy.err"
+  # shellcheck disable=SC2031 # _lock は本関数の冒頭で親のシェルが代入する。サブシェルは SWSC_LOCK_DIR に値を渡すだけで _lock を変えない。ここで読むのは親の値。
   must [ -f "$_lock/owner" ]
   lock_case_clear "$_d"
 }
@@ -3043,17 +3132,27 @@ t_lock_release_non_owner() {
   _d=$(lock_case_dir) || return 1
   _lock=$_d/ports.lock
   _lib="$ROOT/scripts/e2e-lib.sh"
+  # 読み込み先は scripts/e2e-lib.sh に固定されている。e2e-lib.sh は単独で検査するため、ここでは追わない。
+  # Why: 23か所で追うと、shellcheck が e2e-lib.sh を毎回解析し、300秒で終わらず、1.6GBを使う。
+  # 読み込み先は scripts/e2e-lib.sh。単独で検査するため追わない（plan 4.4節の注）。
+  # shellcheck source=/dev/null
   if ( SWSC_LOCK_DIR=$_lock; . "$_lib"; swsc_lock_release ) >/dev/null 2>&1; then
     return 1
   fi
+  # 読み込み先は scripts/e2e-lib.sh。単独で検査するため追わない（plan 4.4節の注）。
+  # shellcheck source=/dev/null
   ( SWSC_LOCK_DIR=$_lock; . "$_lib"; swsc_lock_acquire ) || return 1
   printf '%s\n%s\n' 1 'other' >"$_lock/owner"
+  # 読み込み先は scripts/e2e-lib.sh。単独で検査するため追わない（plan 4.4節の注）。
+  # shellcheck source=/dev/null
   if ( SWSC_LOCK_DIR=$_lock; . "$_lib"; swsc_lock_release ) >/dev/null 2>&1; then
     return 1
   fi
   must [ -d "$_lock" ]
   must grep -Fxq 1 "$_lock/owner"
   printf '%s\n%s\n' "$$" 'self' >"$_lock/owner"
+  # 読み込み先は scripts/e2e-lib.sh。単独で検査するため追わない（plan 4.4節の注）。
+  # shellcheck source=/dev/null
   ( SWSC_LOCK_DIR=$_lock; . "$_lib"; swsc_lock_release ) || return 1
   must [ ! -e "$_lock" ]
   lock_case_clear "$_d"
@@ -3061,26 +3160,72 @@ t_lock_release_non_owner() {
 
 t_check_ports_free() {
   _lib="$ROOT/scripts/e2e-lib.sh"
+  # 読み込み先は scripts/e2e-lib.sh に固定されている。e2e-lib.sh は単独で検査するため、ここでは追わない。
+  # Why: 23か所で追うと、shellcheck が e2e-lib.sh を毎回解析し、300秒で終わらず、1.6GBを使う。
+  # 読み込み先は scripts/e2e-lib.sh。単独で検査するため追わない（plan 4.4節の注）。
+  # shellcheck source=/dev/null
+  # shellcheck disable=SC2329 # swsc_port_in_use は、. で読み込んだ e2e-lib.sh の swsc_check_ports_free が呼ぶ。この部分シェルの中だけで差し替える意図。
   ( . "$_lib"; swsc_port_in_use() { return 1; }; swsc_check_ports_free 8080 3128 4566 ) || return 1
+  # 読み込み先は scripts/e2e-lib.sh。単独で検査するため追わない（plan 4.4節の注）。
+  # shellcheck source=/dev/null
+  # shellcheck disable=SC2329 # swsc_port_in_use は、. で読み込んだ e2e-lib.sh の swsc_check_ports_free が呼ぶ。この部分シェルの中だけで差し替える意図。
   ( . "$_lib"; swsc_port_in_use() { return 1; }; swsc_check_ports_free 1 65535 ) || return 1
   _calls=$TMP/calls.log
+  # 読み込み先は scripts/e2e-lib.sh。単独で検査するため追わない（plan 4.4節の注）。
+  # shellcheck source=/dev/null
+  # shellcheck disable=SC2329 # swsc_port_in_use は、. で読み込んだ e2e-lib.sh の swsc_check_ports_free が呼ぶ。この部分シェルの中だけで差し替える意図。
   if ( . "$_lib"; swsc_port_in_use() { echo "$1" >>"$_calls"; [ "$1" = 3128 ]; }; swsc_check_ports_free 8080 3128 4566 ) 2>"$TMP/busy.err"; then
     return 1
   fi
   must grep -Fq 3128 "$TMP/busy.err"
   must [ "$(grep -c '' "$_calls")" -eq 3 ]
+  # 読み込み先は scripts/e2e-lib.sh。単独で検査するため追わない（plan 4.4節の注）。
+  # shellcheck source=/dev/null
+  # shellcheck disable=SC2329 # swsc_port_in_use は、. で読み込んだ e2e-lib.sh の swsc_check_ports_free が呼ぶ。この部分シェルの中だけで差し替える意図。
   if ( . "$_lib"; swsc_port_in_use() { return 1; }; swsc_check_ports_free ) >/dev/null 2>&1; then return 1; fi
+  # 読み込み先は scripts/e2e-lib.sh。単独で検査するため追わない（plan 4.4節の注）。
+  # shellcheck source=/dev/null
+  # shellcheck disable=SC2329 # swsc_port_in_use は、. で読み込んだ e2e-lib.sh の swsc_check_ports_free が呼ぶ。この部分シェルの中だけで差し替える意図。
   if ( . "$_lib"; swsc_port_in_use() { return 1; }; swsc_check_ports_free '' ) >/dev/null 2>&1; then return 1; fi
+  # 読み込み先は scripts/e2e-lib.sh。単独で検査するため追わない（plan 4.4節の注）。
+  # shellcheck source=/dev/null
+  # shellcheck disable=SC2329 # swsc_port_in_use は、. で読み込んだ e2e-lib.sh の swsc_check_ports_free が呼ぶ。この部分シェルの中だけで差し替える意図。
   if ( . "$_lib"; swsc_port_in_use() { return 1; }; swsc_check_ports_free abc ) >/dev/null 2>&1; then return 1; fi
+  # 読み込み先は scripts/e2e-lib.sh。単独で検査するため追わない（plan 4.4節の注）。
+  # shellcheck source=/dev/null
+  # shellcheck disable=SC2329 # swsc_port_in_use は、. で読み込んだ e2e-lib.sh の swsc_check_ports_free が呼ぶ。この部分シェルの中だけで差し替える意図。
   if ( . "$_lib"; swsc_port_in_use() { return 1; }; swsc_check_ports_free 0 ) >/dev/null 2>&1; then return 1; fi
+  # 読み込み先は scripts/e2e-lib.sh。単独で検査するため追わない（plan 4.4節の注）。
+  # shellcheck source=/dev/null
+  # shellcheck disable=SC2329 # swsc_port_in_use は、. で読み込んだ e2e-lib.sh の swsc_check_ports_free が呼ぶ。この部分シェルの中だけで差し替える意図。
   if ( . "$_lib"; swsc_port_in_use() { return 1; }; swsc_check_ports_free 65536 ) >/dev/null 2>&1; then return 1; fi
+  # 読み込み先は scripts/e2e-lib.sh。単独で検査するため追わない（plan 4.4節の注）。
+  # shellcheck source=/dev/null
+  # shellcheck disable=SC2329 # swsc_port_in_use は、. で読み込んだ e2e-lib.sh の swsc_check_ports_free が呼ぶ。この部分シェルの中だけで差し替える意図。
   if ( . "$_lib"; swsc_port_in_use() { return 1; }; swsc_check_ports_free 8080 abc ) >/dev/null 2>&1; then return 1; fi
 }
 
 # T2602: Client の環境変数、WireMock の path 件数、Squid のログ検査。
 # Why: 偽の docker と curl を、検査専用の一時ディレクトリだけに置き、実の Docker と WireMock に触れないようにする。
+# 偽の経路の置き場に、危ない命令の保護用の偽物を置く。PATH の後ろにある実環境の同名の命令へ届かないようにする。
+# Why: PATH="$_bin:$PATH" のままだと、偽物が無い命令は実環境の docker、curl、aws、ssh へ届くため。
+# 偽物は、この後で各ヘルパーが同じ名前で上書きする。
+t2602_guard_bin() { # 置き場
+  mkdir -p "$1"
+  for _n in docker docker-compose curl aws ssh; do
+    cat >"$1/$_n" <<'EOF'
+#!/bin/sh
+# このテストに無い命令が呼ばれたら止める。終了コード97で、実環境の同名の命令は動かさない。
+printf 'blocked by test: %s %s\n' "$0" "$*" >&2
+exit 97
+EOF
+    chmod +x "$1/$_n"
+  done
+}
+
 t2602_fake_docker() { # 置き場
   mkdir -p "$1"
+  t2602_guard_bin "$1"
   cat >"$1/docker" <<'EOF'
 #!/bin/sh
 # 呼ばれた引数を1行1要素で記録する。Why: 空白や引用符を含む値が、分かれずに1要素で届いたかを見るため。
@@ -3104,6 +3249,7 @@ EOF
 
 t2602_fake_curl() { # 置き場
   mkdir -p "$1"
+  t2602_guard_bin "$1"
   cat >"$1/curl" <<'EOF'
 #!/bin/sh
 # 応答ファイルの中身を返す。SWSC_FAKE_CURL_FAIL があれば、接続失敗と同じ終了コードで止まる。
@@ -3128,24 +3274,39 @@ t_client_once_env_rejects_control() {
   printf '%s\n' --name swsc-client-R1 swsc-client:e2e --label keep-me >"$_run/swsc-client-R1.args"
   for _bad in '1ABC=x' 'BAD-NAME=x' '=x' 'NOEQ' "OK=$(printf 'a\nb')" "OK=$(printf 'a\tb')" "OK=$(printf 'a\033b')" "$(printf 'OK\n=x')"; do
     _rc=0
+    # 読み込み先は scripts/e2e-lib.sh。単独で検査するため追わない（plan 4.4節の注）。
+    # shellcheck source=/dev/null
+    # shellcheck disable=SC2030 # PATH と SWSC_FAKE_REC は、このサブシェルの中だけで変える（fake docker を先頭に置き、記録先を渡す）。親の値は変わらず、後の行で読むのも親の値。
     (PATH="$_bin:$PATH"; export SWSC_FAKE_REC="$_rec"; . "$_lib"; swsc_client_once_env "$_run" R1 "$_url" "$_d/out" "$_d/err" "$_bad") >/dev/null 2>&1 || _rc=$?
     [ "$_rc" -eq 2 ] || return 1
     [ ! -e "$_rec" ] || return 1
   done
   # 前提が足りない（引数が少ない、出力先が空、実行ディレクトリが無い）ときも、docker を呼ばず 2 を返す。
   _rc=0
+  # 読み込み先は scripts/e2e-lib.sh。単独で検査するため追わない（plan 4.4節の注）。
+  # shellcheck source=/dev/null
+  # shellcheck disable=SC2030,SC2031 # PATH と SWSC_FAKE_REC は、このサブシェルの中だけで変える（fake docker を先頭に置き、記録先を渡す）。親の値は変わらず、後の行で読むのも親の値。
   (PATH="$_bin:$PATH"; export SWSC_FAKE_REC="$_rec"; . "$_lib"; swsc_client_once_env "$_run" R1 "$_url") >/dev/null 2>&1 || _rc=$?
   [ "$_rc" -eq 2 ] || return 1
   _rc=0
+  # 読み込み先は scripts/e2e-lib.sh。単独で検査するため追わない（plan 4.4節の注）。
+  # shellcheck source=/dev/null
+  # shellcheck disable=SC2030,SC2031 # PATH と SWSC_FAKE_REC は、このサブシェルの中だけで変える（fake docker を先頭に置き、記録先を渡す）。親の値は変わらず、後の行で読むのも親の値。
   (PATH="$_bin:$PATH"; export SWSC_FAKE_REC="$_rec"; . "$_lib"; swsc_client_once_env "$_run" R1 "$_url" "" "$_d/err") >/dev/null 2>&1 || _rc=$?
   [ "$_rc" -eq 2 ] || return 1
   _rc=0
+  # 読み込み先は scripts/e2e-lib.sh。単独で検査するため追わない（plan 4.4節の注）。
+  # shellcheck source=/dev/null
+  # shellcheck disable=SC2030,SC2031 # PATH と SWSC_FAKE_REC は、このサブシェルの中だけで変える（fake docker を先頭に置き、記録先を渡す）。親の値は変わらず、後の行で読むのも親の値。
   (PATH="$_bin:$PATH"; export SWSC_FAKE_REC="$_rec"; . "$_lib"; swsc_client_once_env "$_d/none" R1 "$_url" "$_d/out" "$_d/err") >/dev/null 2>&1 || _rc=$?
   [ "$_rc" -eq 2 ] || return 1
   [ ! -e "$_rec" ] || return 1
   # 正常系。値は空白、引用符、$( ) を含むが、シェルで評価されず1要素で届く。
   _quoted="NAME_B=say \"hi\" 'x' \$(touch $_d/marker)"
   _rc=0
+  # 読み込み先は scripts/e2e-lib.sh。単独で検査するため追わない（plan 4.4節の注）。
+  # shellcheck source=/dev/null
+  # shellcheck disable=SC2030,SC2031 # PATH と SWSC_FAKE_REC は、このサブシェルの中だけで変える（fake docker を先頭に置き、記録先を渡す）。親の値は変わらず、後の行で読むのも親の値。
   (PATH="$_bin:$PATH"; export SWSC_FAKE_REC="$_rec"; . "$_lib"; swsc_client_once_env "$_run" R1 "$_url" "$_d/out" "$_d/err" 'NAME_A=x y' "$_quoted" 'EMPTY_OK=' 'EQ=a=b') >/dev/null 2>&1 || _rc=$?
   [ "$_rc" -eq 0 ] || return 1
   printf '[%s]\n' run --rm -e 'NAME_A=x y' -e "$_quoted" -e 'EMPTY_OK=' -e 'EQ=a=b' -e "TEST_API_BASE_URL=$_url" \
@@ -3159,6 +3320,9 @@ t_client_once_env_rejects_control() {
   if grep -Fq client-stdout "$_d/err"; then return 1; fi
   # Client の終了コードは、そのまま返す。
   _rc=0
+  # 読み込み先は scripts/e2e-lib.sh。単独で検査するため追わない（plan 4.4節の注）。
+  # shellcheck source=/dev/null
+  # shellcheck disable=SC2030,SC2031 # PATH と SWSC_FAKE_REC は、このサブシェルの中だけで変える（fake docker を先頭に置き、記録先を渡す）。親の値は変わらず、後の行で読むのも親の値。
   (PATH="$_bin:$PATH"; export SWSC_FAKE_REC="$_rec" SWSC_FAKE_RC=7; . "$_lib"; swsc_client_once_env "$_run" R1 "$_url" "$_d/out" "$_d/err") >/dev/null 2>&1 || _rc=$?
   [ "$_rc" -eq 7 ] || return 1
   lock_case_clear "$_d"
@@ -3174,6 +3338,9 @@ t_wiremock_count_path() {
   _count() { # 応答 経路
     printf '%s' "$1" >"$_body"
     _rc=0
+    # 読み込み先は scripts/e2e-lib.sh。単独で検査するため追わない（plan 4.4節の注）。
+    # shellcheck source=/dev/null
+    # shellcheck disable=SC2030,SC2031 # PATH と SWSC_FAKE_BODY は、このサブシェルの中だけで変える（fake curl を先頭に置き、応答を渡す）。親の値は変わらず、ここで読むのも親の値。
     _out=$( (PATH="$_bin:$PATH"; export SWSC_FAKE_BODY="$_body"; . "$_lib"; swsc_wiremock_count_path "$2") 2>/dev/null) || _rc=$?
   }
   # /api/users/123 だけを数える。/api/users/1234、/api/users/123/x、Squid の内部要求は数えない。
@@ -3196,6 +3363,9 @@ t_wiremock_count_path() {
   [ "$_rc" -eq 1 ] || return 1
   # 管理 API の取得に失敗したときは 1。
   _rc=0
+  # 読み込み先は scripts/e2e-lib.sh。単独で検査するため追わない（plan 4.4節の注）。
+  # shellcheck source=/dev/null
+  # shellcheck disable=SC2030,SC2031 # PATH と SWSC_FAKE_BODY は、このサブシェルの中だけで変える（fake curl を先頭に置き、失敗応答を渡す）。親の値は変わらず、後の行で読むのも親の値。
   (PATH="$_bin:$PATH"; export SWSC_FAKE_BODY="$_body" SWSC_FAKE_CURL_FAIL=1; . "$_lib"; swsc_wiremock_count_path /api/users/123) >/dev/null 2>&1 || _rc=$?
   [ "$_rc" -eq 1 ] || return 1
   # 経路は python のコードに埋め込まれず引数で渡る。注入の文字列は一致せず、何も実行されない。
@@ -3204,6 +3374,9 @@ t_wiremock_count_path() {
   [ ! -e "$_d/marker" ] || return 1
   # 経路が無いときは 1。
   _rc=0
+  # 読み込み先は scripts/e2e-lib.sh。単独で検査するため追わない（plan 4.4節の注）。
+  # shellcheck source=/dev/null
+  # shellcheck disable=SC2030,SC2031 # PATH と SWSC_FAKE_BODY は、このサブシェルの中だけで変える（fake curl を先頭に置き、応答を渡す）。親の値は変わらず、後の行で読むのも親の値。
   (PATH="$_bin:$PATH"; export SWSC_FAKE_BODY="$_body"; . "$_lib"; swsc_wiremock_count_path) >/dev/null 2>&1 || _rc=$?
   [ "$_rc" -eq 1 ] || return 1
   lock_case_clear "$_d"
@@ -3219,10 +3392,14 @@ t_squid_log_check() {
   _lib="$ROOT/scripts/e2e-lib.sh"
   t2602_fake_docker "$_bin"
   # 記録には * を含まず、$( ) はそのまま文字列として含む。
+  # shellcheck disable=SC2016 # 書き出すアクセスログの本文として $( ) を文字どおり書く。コマンドとして実行されず、検査が拒否することを確かめる意図。
   printf 'GET /api/users/123 200 $(touch %s/marker);\n' "$_d" >"$_log"
   # 検査の1回。結果は _rc（終了コード）と、標準エラーの $_d/err へ入れる。
   _slog() { # パターン...
     _rc=0
+    # 読み込み先は scripts/e2e-lib.sh。単独で検査するため追わない（plan 4.4節の注）。
+    # shellcheck source=/dev/null
+    # shellcheck disable=SC2031 # PATH と SWSC_FAKE_REC は、このサブシェルの中だけで変える（fake docker を先頭に置き、記録先を渡す）。親の値は変わらず、ここで読むのも親の値。
     (PATH="$_bin:$PATH"; export SWSC_FAKE_REC="$_rec" SWSC_FAKE_LOG="$_log"; . "$_lib"; swsc_squid_log_check "$@") >/dev/null 2>"$_d/err" || _rc=$?
   }
   _slog /api/users/123 200
@@ -3283,6 +3460,7 @@ FAKE
 
 # 残存検査の関数を、偽の docker を入れた PATH で評価する。
 managed_run() { # 本体
+  # shellcheck disable=SC2016 # 単一引用符の中の $1 と $SWSC_ROOT は、env -i で起動した子の sh が展開する。eval で与えた文を子で評価する意図。
   env -i PATH="$TMP/mbin:$TMP/mbase" HOME="$TMP" SWSC_ROOT="$ROOT" SWSC_TEST_DIR="$TMP" \
     sh -c '. "$SWSC_ROOT/scripts/e2e-lib.sh"; eval "$1"' sh "$1"
 }
@@ -3343,6 +3521,7 @@ t_entry_trap_exit_143_start_refuses_when_locked() {
   entry_setup || return 1
   lock_busy_setup || return 1
   _rc=0
+  # shellcheck disable=SC2016 # lib_call に渡す関数定義の文字列。$SWSC_TEST_SEQ は、lib_call の子の sh で関数を実行するときに展開する。親では展開させない意図。
   lib_call 'swsc_start_main() { echo start >>"$SWSC_TEST_SEQ"; }; swsc_start_op' >/dev/null 2>"$TMP/err" || _rc=$?
   must [ "$_rc" -eq 1 ]
   must [ ! -s "$TMP/seq.log" ]
@@ -3368,6 +3547,7 @@ t_entry_trap_exit_143_start_releases_lock_on_success_and_failure() {
 t_entry_trap_exit_143_start_term_stops_then_releases_lock() {
   entry_setup || return 1
   _rc=0
+  # shellcheck disable=SC2016 # lib_call に渡す関数定義の文字列。$SWSC_TEST_SEQ と $$ は、lib_call の子の sh で展開する。$$ は子の sh の PID で、子へ TERM を送るための意図。親の PID にはしない。
   lib_call 'swsc_start_main() { echo start >>"$SWSC_TEST_SEQ"; kill -TERM $$; return 0; }
 swsc_stop() { if [ -d "$SWSC_LOCK_DIR" ]; then echo stop-held >>"$SWSC_TEST_SEQ"; fi; }
 swsc_start_op' >/dev/null 2>&1 || _rc=$?
@@ -3379,6 +3559,7 @@ swsc_start_op' >/dev/null 2>&1 || _rc=$?
 t_entry_trap_exit_143_start_busy_port_creates_nothing_and_releases() {
   entry_setup || return 1
   _rc=0
+  # shellcheck disable=SC2016 # lib_call に渡す関数定義の文字列。$1 は、lib_call の子の sh で関数の引数を読むときに展開する。親では展開させない意図。
   lib_call 'swsc_port_in_use() { [ "$1" = 3128 ]; }
 swsc_stop() { echo stop >>"$SWSC_TEST_SEQ"; }
 swsc_build_images() { echo build >>"$SWSC_TEST_SEQ"; }
@@ -3393,6 +3574,7 @@ swsc_start_op' >/dev/null 2>"$TMP/err" || _rc=$?
 t_entry_trap_exit_143_test_ci_takes_lock_once_and_releases_after_stop() {
   entry_setup || return 1
   _rc=0
+  # shellcheck disable=SC2016 # lib_call に渡す関数定義の文字列。$SWSC_TEST_SEQ と $SWSC_LOCK_HELD は、lib_call の子の sh で関数を実行するときに展開する。親では展開させない意図。
   lib_call 'swsc_start_main() { echo start >>"$SWSC_TEST_SEQ"; if [ "${SWSC_LOCK_HELD:-0}" = 1 ]; then echo held-in-start >>"$SWSC_TEST_SEQ"; fi; return 0; }
 swsc_test_run() { echo test >>"$SWSC_TEST_SEQ"; return 0; }
 swsc_collect() { echo collect >>"$SWSC_TEST_SEQ"; return 0; }
@@ -3416,6 +3598,7 @@ t_entry_trap_exit_143_test_ci_refuses_when_locked() {
 t_entry_trap_exit_143_test_ci_int_releases_after_stop() {
   entry_setup || return 1
   _rc=0
+  # shellcheck disable=SC2016 # lib_call に渡す関数定義の文字列。$SWSC_TEST_SEQ と $$ は、lib_call の子の sh で展開する。$$ は子の sh の PID で、子へ INT を送るための意図。親の PID にはしない。
   lib_call 'swsc_start_main() { echo start >>"$SWSC_TEST_SEQ"; kill -INT $$; return 0; }
 swsc_collect() { echo collect >>"$SWSC_TEST_SEQ"; }
 swsc_stop() { if [ -d "$SWSC_LOCK_DIR" ]; then echo stop-held >>"$SWSC_TEST_SEQ"; fi; }
@@ -3428,6 +3611,7 @@ swsc_test_ci_main' >/dev/null 2>&1 || _rc=$?
 t_entry_trap_exit_143_test_ci_term_releases_after_stop() {
   entry_setup || return 1
   _rc=0
+  # shellcheck disable=SC2016 # lib_call に渡す関数定義の文字列。$SWSC_TEST_SEQ と $$ は、lib_call の子の sh で展開する。$$ は子の sh の PID で、子へ TERM を送るための意図。親の PID にはしない。
   lib_call 'swsc_start_main() { echo start >>"$SWSC_TEST_SEQ"; kill -TERM $$; return 0; }
 swsc_collect() { echo collect >>"$SWSC_TEST_SEQ"; }
 swsc_stop() { if [ -d "$SWSC_LOCK_DIR" ]; then echo stop-held >>"$SWSC_TEST_SEQ"; fi; }
@@ -3440,6 +3624,7 @@ swsc_test_ci_main' >/dev/null 2>&1 || _rc=$?
 t_entry_trap_exit_143_test_op_term_releases_lock() {
   entry_setup || return 1
   _rc=0
+  # shellcheck disable=SC2016 # lib_call に渡す関数定義の文字列。$SWSC_TEST_SEQ と $$ は、lib_call の子の sh で展開する。$$ は子の sh の PID で、子へ TERM を送るための意図。親の PID にはしない。
   lib_call 'swsc_test_run() { echo test >>"$SWSC_TEST_SEQ"; kill -TERM $$; return 0; }
 swsc_stop() { if [ -d "$SWSC_LOCK_DIR" ]; then echo stop-held >>"$SWSC_TEST_SEQ"; fi; }
 swsc_test_op' >/dev/null 2>&1 || _rc=$?
@@ -3470,6 +3655,7 @@ t_entry_trap_exit_143_stop_clean_logs_ignore_lock() {
 
 t_entry_trap_exit_143_contract_refuses_busy_4566_and_releases() {
   contract_setup || return 1
+  # shellcheck disable=SC2016 # contract_go に渡す関数定義の文字列。$1 は、子の sh で関数の引数を読むときに展開する。親では展開させない意図。
   contract_go 'swsc_port_in_use() { [ "$1" = 4566 ]; }; swsc_collect() { :; }; contract_main'
   must [ "$RC" -eq 1 ]
   must [ -z "$(seq_line 'docker run')" ]
@@ -3665,7 +3851,7 @@ run_unit() {
   check 'トリガーは pull_request（全ブランチ）と、main への push だけ' t_wf_triggers_are_pull_request_and_main_push_only
   check 'permissions は contents: read だけ' t_wf_permissions_are_contents_read_only
   check 'ジョブは ubuntu-24.04 で、timeout-minutes は15' t_wf_job_runs_on_ubuntu_2404_with_15_minute_limit
-  check 'ステップの timeout は unit 3、test-ci 10、smoke 8、contract 5' t_wf_step_timeouts_are_unit3_test_ci10_smoke8_contract5
+  check 'ステップの timeout は shellcheck 3、unit 3、test-ci 10、smoke 8、contract 5' t_wf_step_timeouts_are_shellcheck3_unit3_test_ci10_smoke8_contract5
   check 'ダミー認証情報は workflow の env だけに、値 test で書く' t_wf_dummy_credentials_are_workflow_env_only
   check 'concurrency は PR で ref、それ以外で SHA を使い、PR だけ取り消す' t_wf_concurrency_groups_pr_by_ref_and_pushes_by_sha
   check 'collect と stop は always、upload は failure で動く' t_wf_collect_always_upload_on_failure_stop_always
@@ -3673,11 +3859,12 @@ run_unit() {
   check 'Secrets の文脈を読まない' t_wf_never_reads_secrets_context
   check 'run: に式と複数行の記法を書かない' t_wf_run_lines_have_no_expression_or_block_scalar
   check '式は concurrency と アーティファクト名の中だけ' t_wf_expressions_only_in_concurrency_and_artifact_name
-  check 'uses は checkout と upload-artifact の2つだけで、コミットSHAで固定する' t_wf_uses_only_checkout_and_upload_artifact
+  check 'uses は checkout と mise-action と upload-artifact の3つだけで、コミットSHAで固定する' t_wf_uses_checkout_mise_action_and_upload_artifact
   check 'checkout は認証情報を保存しない' t_wf_checkout_does_not_persist_credentials
-  check 'ステップの順序は checkout、unit、test-ci、smoke、contract、collect、upload、stop' t_wf_steps_run_in_plan_order
+  check 'ステップの順序は checkout、mise-action、shellcheck、unit、test-ci、smoke、contract、collect、upload、stop' t_wf_steps_run_in_plan_order
   check '各ステップは計画どおりの入口を1つだけ呼ぶ' t_wf_each_step_runs_its_command
   check 'docker compose と docker-compose を呼ばない' t_wf_has_no_docker_compose_call
+  check 'shellcheck の設定と mise.toml は必要な行だけを持つ（disable、[tasks]、[hooks]、[env] なし）' t_shellcheck_config_and_mise_toml_are_restricted
   check 'test-ci の検査列に M08 の4シナリオが直列で入り、専用の step は増えない' t_ci_test_ci_scenarios
   if python3 -c 'import yaml' >/dev/null 2>&1; then
     check 'workflow は YAML として読め、形が一致する' t_wf_yaml_parses_with_expected_shape
@@ -3712,6 +3899,7 @@ run_unit() {
   check 'M02 はゲートの対象で、稼働中のスタックを前提とする NOTE が無い' t_gate_m02_runs_in_gate_without_stack_note
   check 'ゲートは Compose の呼び出しと、|| true で包んだ Docker の呼び出しを持たない' t_gate_no_compose_calls_or_or_true_wrapped_docker
   check 'ゲートは S14 の unit と管理対象の残存検査（swsc_check_managed_empty）を実行する' t_gate_runs_s14_contract_unit_and_managed_check_for_squid_block
+  check 'ゲートの shellcheck は mise which の実体を、版を比べ、自動導入を止めて実行し、sh -n と mise exec を持たない' t_gate_runs_shellcheck_with_pinned_options
   check 'Docker の失敗は管理対象の残存検査で status=1 になる（ゲートの定義から取り出して確かめる）' t_managed_resource_check_failure
   check '管理対象の残存が無ければ、ゲートの残存検査は status=0 のまま' t_managed_resource_check_passes_when_empty_in_gate
   printf '== T2601 ロックとポート確認\n'

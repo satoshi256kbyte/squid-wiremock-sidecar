@@ -15,6 +15,7 @@ cd "$ROOT"
 
 # 作業場所は実行ごとに作り、終了時に消す。空のときに rm を走らせないため、作成の後にだけ変数を設定する。
 TMP=
+# shellcheck disable=SC2329 # trap EXIT の文字列 'cleanup' で呼ばれるため、直接の参照は無い
 cleanup() {
   if [ -n "$TMP" ]; then
     rm -rf "$TMP"
@@ -51,6 +52,7 @@ check() { # 名前 関数
 }
 
 # 固定の ACL 行。送信元の範囲と許可・拒否の行を、完全一致で確かめる。
+# shellcheck disable=SC2329 # check の引数に関数名として渡され、そこから呼ばれるため（下の check 行）
 s14_acl_lines() {
   _c=squid-config/squid.conf
   grep -Fxq -- 'acl local_src src 127.0.0.0/8 10.0.0.0/8 172.16.0.0/12 192.168.0.0/16' "$_c" || return 1
@@ -64,6 +66,7 @@ s14_acl_lines() {
 
 # 派生設定の構文の静的検査。Squid を起動せず、派生の結果の指令名を派生元と照らす。
 # Why: squid -k parse は Docker が要るため、ここでは派生の出力が既知の指令だけで書かれていることを確かめる。
+# shellcheck disable=SC2329 # check の引数に関数名として渡され、そこから呼ばれるため（下の check 行）
 s14_derived_config_parse() {
   _src=squid-config/squid.conf
   _mock=$TMP/derived-mock.conf
@@ -102,15 +105,17 @@ s14_derived_config_parse() {
 }
 
 # WireMock のシナリオは、読み取り専用（:ro）で1回だけ渡す。書き込み可能な宛先で渡すと、検査の前提が崩れるため。
+# shellcheck disable=SC2329 # check の引数に関数名として渡され、そこから呼ばれるため（下の check 行）
 s14_mapping_readonly() {
   _r=scripts/e2e-runner.sh
   [ "$(grep -c 'wiremock-scenarios' "$_r" || true)" -eq 1 ] || return 1
   [ "$(grep -c '/home/wiremock' "$_r" || true)" -eq 1 ] || return 1
-  grep -Fxq -- '    -v "$SWSC_ROOT/wiremock-scenarios:/home/wiremock:ro" \' "$_r"
+  grep -Fxq -- "    -v \"\$SWSC_ROOT/wiremock-scenarios:/home/wiremock:ro\" \\" "$_r"
 }
 
 # Squid はホストへ公開しない。taskdef から作った docker run の引数に公開の指定が無く、
 # ランナーのホスト公開は WireMock の 127.0.0.1:8080 だけであることを確かめる。
+# shellcheck disable=SC2329 # check の引数に関数名として渡され、そこから呼ばれるため（下の check 行）
 s14_squid_not_published() {
   _tpl=ecs/task-definition.template.json
   _taskdef=$TMP/taskdef.json
@@ -135,6 +140,7 @@ s14_squid_not_published() {
 
 # 許可ドメインは、有効な行（空行と # のコメントを除く）が2件だけで、内容も固定する。
 # Why: 行を足すと、SQUID_UPSTREAM=direct のときに、レビューを経ずに外部への通信先が広がるため（旧 S14 の検査を引き継ぐ）。
+# shellcheck disable=SC2329 # check の引数に関数名として渡され、そこから呼ばれるため（下の check 行）
 s14_allowlist_fixed() {
   _w=squid-config/whitelist.txt
   _got=$(grep -Ev '^[[:space:]]*(#|$)' "$_w" | sort)

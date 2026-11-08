@@ -4,13 +4,18 @@
 # 名前と版の定数。Why: 版を1か所に置き、文書と検査が同じ値を見るため（NFR-909）。
 SWSC_PREFIX=swsc-
 SWSC_LABEL=swsc.managed=true
+# shellcheck disable=SC2034 # scripts/e2e-runner.sh が $SWSC_NET を使う（ネットワーク作成と接続）
 SWSC_NET=swsc-net
 SWSC_MINISTACK_IMAGE=ministackorg/ministack:1.5.37
+# shellcheck disable=SC2034 # scripts/e2e-runner.sh が $SWSC_PAUSE_IMAGE を使う（pause 共有 namespace）
 SWSC_PAUSE_IMAGE=alpine:3.20
+# shellcheck disable=SC2034 # scripts/e2e-runner.sh が $SWSC_WIREMOCK_IMAGE を使う（WireMock の起動）
 SWSC_WIREMOCK_IMAGE=wiremock/wiremock:3.13.1
 SWSC_MINISTACK_ENDPOINT=http://127.0.0.1:4566
 SWSC_REGION=ap-northeast-1
+# shellcheck disable=SC2034 # scripts/e2e-contract.sh が $SWSC_MINISTACK_NAME を使う（コンテナの起動と照合）
 SWSC_MINISTACK_NAME=swsc-ministack
+# shellcheck disable=SC2034 # scripts/e2e-contract.sh が $SWSC_MINISTACK_PORT を使う（ポートの確認と公開）
 SWSC_MINISTACK_PORT=4566
 # Why: 出力先を既定の .e2e から変えられるようにする。検査の unit が一時領域へ向けるため。
 : "${SWSC_E2E_DIR:=${SWSC_ROOT:-}/.e2e}"
@@ -273,6 +278,7 @@ swsc_start_op() {
   swsc_lock_enter || return 1
   trap 'exit 130' INT
   trap 'exit 143' TERM
+  # shellcheck disable=SC2154 # trap 文字列の中で _t に終了コードを代入し、同じ文字列の中で読む（誤検出）
   trap '_t=$?; swsc_stop >/dev/null 2>&1 || true; swsc_lock_leave || [ "$_t" -ne 0 ] || _t=1; exit "$_t"' EXIT
   _rc=0
   swsc_start_main || _rc=$?
@@ -422,7 +428,13 @@ swsc_test_run() {
     return 1
   fi
   _dir=$SWSC_E2E_DIR/run
-  _args=$(ls "$_dir"/swsc-client-*.args 2>/dev/null | head -n 1 || true)
+  _args=
+  for _f in "$_dir"/swsc-client-*.args; do
+    if [ -e "$_f" ]; then
+      _args=$_f
+      break
+    fi
+  done
   if [ -z "$_args" ]; then
     printf 'FAIL: 起動情報が無い。先に start を実行する\n' >&2
     return 1

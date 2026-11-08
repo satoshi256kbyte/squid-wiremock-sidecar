@@ -6,6 +6,7 @@
 set -eu
 
 ROOT=$(cd "$(dirname "$0")/.." && pwd)
+# shellcheck disable=SC2034 # 読み込む scripts/e2e-lib.sh が SWSC_ROOT を参照する（出力先の既定値）
 SWSC_ROOT=$ROOT
 # shellcheck source=/dev/null
 . "$ROOT/scripts/e2e-lib.sh"

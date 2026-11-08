@@ -29,18 +29,23 @@ Critical、High、またはMediumの指摘が残っている場合は、修正�
 
 | 変更範囲 | 実行するゲート |
 | --- | --- |
-| ドキュメント、Spec Kit、AGENTS.mdのみ | `npm run lint:md`（markdownlint-cli2、固定版）、`git diff --check` |
-| シェル、テスト、Test Client | 上記、`sh -n`、変更対象に対応するテスト |
+| ドキュメント、Spec Kit、AGENTS.mdのみ | `shellcheck`（変更範囲に関わらず毎回実行。mise が必要）、`npm run lint:md`（markdownlint-cli2、固定版）、`git diff --check` |
+| シェル、テスト、Test Client | 上記、`shellcheck`、変更対象に対応するテスト |
 | Dockerfile、Squid、WireMock、Test Client | 上記、関連smoke test（M02〜M08の該当スクリプト）、管理対象の残存検査 |
 | 複数コンポーネントまたは影響範囲が不明 | 全ての該当ゲートと関連smoke test |
 | 型付きアプリケーション | 型検査設定を追加した場合のみ、設定済みの型検査を実行する |
 | AWS CDK、Ministack | 構成を追加した場合のみ、対応するsynth・構成検査を実行する |
-| ECS タスク定義方式のE2E基盤（`scripts/e2e*.sh`、`ecs/`、`tests/m09-execution-and-ci.sh`） | 上記、`sh -n`、`python3 -B -m py_compile scripts/e2e-taskdef.py`、`sh tests/m09-execution-and-ci.sh unit`と`smoke`。`contract`は利用者の端末とCIだけで実行し、品質ゲートに登録しない |
+| ECS タスク定義方式のE2E基盤（`scripts/e2e*.sh`、`ecs/`、`tests/m09-execution-and-ci.sh`） | 上記、`shellcheck`、`python3 -B -m py_compile scripts/e2e-taskdef.py`、`sh tests/m09-execution-and-ci.sh unit`と`smoke`。`contract`は利用者の端末とCIだけで実行し、品質ゲートに登録しない |
 
 品質ゲートは `sh scripts/quality-gate.sh` で実行する。
 既定ではorigin/mainとの差分から変更範囲を判定し、該当するゲートだけを実行する。
 Markdown検査には依存の導入が必要であり、初回は `npm ci` を実行する。
 依存が未導入の場合、品質ゲートは成功扱いにせず失敗する。
+
+shellcheckは、変更範囲に関わらず毎回実行する。文書だけの変更でも、mise が必要である。
+shellcheckの版は `mise.toml` と `mise.lock` で固定する。初回は `mise install --locked` を実行する。
+mise、または shellcheck が未導入の場合、品質ゲートは `FAILED:` と導入手順を出して止まる。
+導入手順、版の固定、CIの step は [ローカル実行とCI](docs/ローカル実行とCI.md) に書く。
 
 M02、M03、M04のsmoke testはライフサイクル契約が異なるため、
 変更対象に対応するスクリプトを個別に実行する。

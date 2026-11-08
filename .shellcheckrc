@@ -1,0 +1,4 @@
+shell=sh
+severity=style
+external-sources=true
+source-path=SCRIPTDIR

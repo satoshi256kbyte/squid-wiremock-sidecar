@@ -9,6 +9,7 @@ LIB="$ROOT/test-client/retry-lib.sh"
 MODE=${1:-smoke}
 # 新基盤の共通部品（ロック、起動、Client 実行、停止）。読み込みに副作用はない。
 # Why: smoke が swsc_lock_enter、swsc_start_main などを使うため。
+# shellcheck disable=SC2034 # 直後で読み込む scripts/e2e-lib.sh が SWSC_ROOT を参照する
 SWSC_ROOT=$ROOT
 # shellcheck source=/dev/null
 . "$ROOT/scripts/e2e-lib.sh"
@@ -98,6 +99,7 @@ cfg_run() {
   _fn=$1
   _show=$2
   shift 2
+# shellcheck disable=SC2016 # 単一引用符の中の $1、$2 は子の sh が展開する（引数の受け渡し）
   env -i PATH="$PATH" "$@" sh -c '
     . "$1" || exit 99
     "$2"
@@ -161,6 +163,7 @@ ep_obs() {
   trap 'rm -f "$_work"/* ; rmdir "$_work"' EXIT
 
   # 台本は空白区切りの1語ずつを1行にする。語の中に glob 文字は含まれない。
+# shellcheck disable=SC2086 # 台本は検査が渡す固定の文字列（呼び出し元の ep_obs の引数）で、空白で区切った語を1行ずつにする意図
   printf '%s\n' $_tape > "$_work/tape"
 
   cat > "$_work/curl" <<'STUB_CURL'
@@ -417,6 +420,7 @@ unit_named_m06() {
 
 run_unit() {
   if [ -f "$LIB" ]; then
+    # shellcheck source=../test-client/retry-lib.sh
     . "$LIB"
   else
     printf 'FAIL: retry-lib.sh が見つからない (%s)\n' "$LIB" >&2
