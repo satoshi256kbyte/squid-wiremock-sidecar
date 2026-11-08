@@ -609,12 +609,12 @@ R01の8.1節と同じ手順で、リポジトリの`mise.toml`を書き換えず
 
 | # | 項目 | 確かめる内容と方法 | 確かめる時期 | 状態 |
 | --- | --- | --- | --- | --- |
-| U1 | batsがmise（aqua）で入るか | aquaの定義は`github_archive`（ソースのアーカイブ）。`mise lock`が4環境を記録し、`mise install --locked`が成功し、`mise which bats`の実体で`@test`が動くか。`bin/bats`が同梱の`libexec`を相対で見つけられるか | commit 0 | 未確認 |
-| U2 | yqがmiseで入るか | `github_release`、`checksums-bsd`のSHA512。`mise.lock`のSHA256の出所が`mise-versions`か、公式の資産か。4環境の記録の可否 | commit 0 | 未確認 |
-| U3 | actionlint、gitleaks、jqの4環境 | `mise lock`が4環境を記録できるか。URLが公式のリリースか | commit 0 | 未確認 |
-| U4 | `--version`の出力の形と`mise current`の値 | 5つの出力から版を取り出す式。jqの`1.8.2`と`jq-1.8.2`の表記。gitleaksは`version`サブコマンドか | commit 0 | 未確認 |
-| U5 | 取得物の完全性 | `mise.lock`のSHA256が、公式の資産の値と一致するか（`gh api`の`digest`、または`checksums`ファイル） | commit 0 | 未確認 |
-| U6 | `jdx/mise-action`の`install_args: --locked` | ソースで受理される形か。`--locked`が重複しないか | commit 0（初回のCIの前） | 未確認 |
+| U1 | batsがmise（aqua）で入るか | aquaの定義は`github_archive`（ソースのアーカイブ）。`mise lock`が4環境を記録し、`mise install --locked`が成功し、`mise which bats`の実体で`@test`が動くか。`bin/bats`が同梱の`libexec`を相対で見つけられるか | commit 0 | 確認済み（phase-0-results.md 5章） |
+| U2 | yqがmiseで入るか | `github_release`、`checksums-bsd`のSHA512。`mise.lock`のSHA256の出所が`mise-versions`か、公式の資産か。4環境の記録の可否 | commit 0 | 一部確認（SHA256 は一致。checksums-bsd の SHA512 は未照合。phase-0-results.md 3章） |
+| U3 | actionlint、gitleaks、jqの4環境 | `mise lock`が4環境を記録できるか。URLが公式のリリースか | commit 0 | 確認済み（4環境の記録、公式の URL。phase-0-results.md 2章） |
+| U4 | `--version`の出力の形と`mise current`の値 | 5つの出力から版を取り出す式。jqの`1.8.2`と`jq-1.8.2`の表記。gitleaksは`version`サブコマンドか | commit 0 | 確認済み（出力の形と版の取り出し。phase-0-results.md 4章） |
+| U5 | 取得物の完全性 | `mise.lock`のSHA256が、公式の資産の値と一致するか（`gh api`の`digest`、または`checksums`ファイル） | commit 0 | 確認済み（24件一致。phase-0-results.md 3章） |
+| U6 | `jdx/mise-action`の`install_args: --locked` | ソースで受理される形か。`--locked`が重複しないか | commit 0（初回のCIの前） | 確認済み（ソースで受理、重複しない。phase-0-results.md 6章） |
 | U7 | `gitleaks dir`と`.gitignore` | `.gitignore`の対象（`node_modules/`、`e2e-logs/`）を走査するか。走査するなら8.5節の除外を書く | commit 2 | 未確認 |
 | U8 | gitleaksの`dir`の走査範囲 | 追跡対象でない一時ファイルを検出するか。壊した入力の置き方（8.3節）に影響する | commit 2 | 未確認 |
 | U9 | gitleaksの規則の機能 | `[[rules.allowlists]]`の`condition = "AND"`と`paths`、`regexes`が、8.30.1で使えるか。`path`のみの規則（正規表現の`path`）の書き方 | commit 2 | 未確認 |

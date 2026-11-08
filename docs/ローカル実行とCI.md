@@ -246,6 +246,68 @@ M09 の前提ゲート（G1 から G5）の結果を要約する。詳細と観�
 | G3 pause 方式と送信元 ACL | 通過（一部は CI で再確認） | 期待どおりに動く。`squid.conf` は変更しない |
 | G2 ソケットなしの MiniStack | 通過（一部は CI で再確認） | `1.5.37` に固定する。describe は完成版と一致した |
 
+## 導入するツールと版の固定
+
+品質ゲートと CI が使うツールは、`mise.toml` の `[tools]` で版を固定し、`mise.lock` で取得先と SHA256 を固定する。
+導入は次の1行で行う。`--locked` は `mise.lock` に従うことを意味し、記録のない版や取得物は入らない。
+
+```sh
+mise install --locked
+```
+
+導入するツールは6つで、版は次のとおりである。
+
+| ツール | 版（`mise.toml`） |
+| --- | --- |
+| shellcheck | 0.11.0 |
+| actionlint | 1.7.12 |
+| gitleaks | 8.30.1 |
+| bats | 1.14.0 |
+| jq | 1.8.2 |
+| yq | 4.54.2 |
+
+### 版の出力と取り出し方
+
+版の照合は、各ツールの出力から版の文字列を取り出して比べる。出力の形は、次のとおりである。
+
+| ツール | 出力の例 | 版の取り出し |
+| --- | --- | --- |
+| actionlint | `1.7.12`（`-version` を使う） | 行全体 |
+| bats | `Bats 1.14.0` | 空白で区切った2番目 |
+| gitleaks | `gitleaks version 8.30.1` | 最後の語 |
+| jq | `jq-1.8.2` | `jq-` を取り除く（`1.8.2` と `jq-1.8.2` は同じ版） |
+| yq | `yq (https://github.com/mikefarah/yq/) version v4.54.2` | `version v` の後 |
+| shellcheck | `version: 0.11.0` | 既存の方式 |
+
+### bats と jq、yq の扱い
+
+- bats は `github_archive` で導入し、タグのソースのアーカイブを取得する。ビルド済みのバイナリではない。
+  `mise.lock` の SHA256 は、そのアーカイブの値である。
+- jq と yq は、JSON と YAML を読む検査の前提条件である。使う検査は、それぞれの commit で品質ゲートに加わる。
+- フェーズ0で、`mise.lock` の24件の SHA256 を公式の値と照合した（不一致なし）。
+  結果は `specs/R02-R05-tool-replacement/verification/phase-0-results.md` の3章にある。
+
+### mise.lock の更新
+
+1. `mise.toml` の版を、完全な版（例: `1.7.12`）で書き換える。
+2. 次のコマンドで、4つの環境の取得先と SHA256 を作り直す。
+
+   ```sh
+   mise lock --platform linux-x64,linux-arm64,macos-x64,macos-arm64
+   ```
+
+3. 差分が、対象ツールの4つの環境の URL と SHA256 だけであることを確かめる。公式以外の URL があれば止める。
+4. SHA256 を、公式の資産の SHA256（API の `digest`、またはリリースの `checksums` ファイル）と照合し、結果を記録する。
+   bats は、ソースのアーカイブの値と照合する。
+5. `mise install --locked` を実行し、版の出力を確かめる。
+
+### 導入と品質ゲートの実行時間
+
+| 検査 | 実測 |
+| --- | --- |
+| `mise install --locked`（6ツール） | 未反映 |
+| 品質ゲート（6ツールの導入後） | 未反映 |
+
 ## shellcheck の導入と品質ゲート
 
 品質ゲート（`sh scripts/quality-gate.sh`）とCIは、シェルスクリプトを shellcheck で検査する。

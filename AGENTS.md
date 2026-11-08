@@ -25,6 +25,11 @@ Critical、High、またはMediumの指摘が残っている場合は、修正�
 品質ゲートが失敗した場合は原因を修正し、失敗したゲートと最終確認を再実行する。
 品質ゲートを通過するまで、コミット、push、PR作成を行ってはならない。
 
+品質ゲートで使うツールは、`mise.toml` の `[tools]` に6つある（shellcheck、actionlint、gitleaks、bats、jq、yq）。
+導入は `mise install --locked` で行う。`--locked` は `mise.lock` に記録された版と取得物だけを入れる。
+導入されていないツールを使うゲートは、`FAILED:` と導入手順を出して止まる。成功扱いにはしない。
+actionlint、gitleaks、bats、jq、yq の各ゲートは、そのツールを使い始める commit で下の表へ足す。
+
 ### 変更範囲別の品質ゲート
 
 | 変更範囲 | 実行するゲート |

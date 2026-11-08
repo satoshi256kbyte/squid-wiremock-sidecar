@@ -139,6 +139,8 @@ E2E スイートの実行方法、4シナリオの期待値、失敗時の見方
 - curl（動作確認時）
 - mise（`mise.toml` の `min_version` が下限で、2026.11.3 以上が必要。`mise install --locked` で shellcheck を含む必要なツールを導入する）
 - shellcheck（mise で導入する。版は `mise.toml` と `mise.lock` で固定。品質ゲートが毎回検査する）
+- actionlint、gitleaks、bats、jq、yq（mise で導入する。版は `mise.toml` と `mise.lock` で固定）
+  `mise install --locked` で入る。bats はソースのアーカイブから入る。jq と yq は JSON と YAML を読む検査の前提である。
 
 導入と版の固定、CI の step は [ローカル実行とCI](docs/ローカル実行とCI.md) を参照する。
 

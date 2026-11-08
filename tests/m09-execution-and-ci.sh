@@ -2673,13 +2673,32 @@ t_shellcheck_config_and_mise_toml_are_restricted() {
   # .shellcheckrc は4行だけで、disable= を持たない。
   must [ "$(grep -c . "$_rc" || true)" -eq 4 ]
   must [ "$(grep -c 'disable=' "$_rc" || true)" -eq 0 ]
-  # mise.toml は min_version と [tools] の shellcheck の3行だけで、テーブルは [tools] の1つだけ。
-  must [ "$(grep -cvE '^(#|$)' "$_mt" || true)" -eq 3 ]
+  # mise.toml は min_version と [tools] の6ツールの行だけで、テーブルは [tools] の1つだけ。shellcheck は必ず残す。
+  must [ "$(grep -cvE '^(#|$)' "$_mt" || true)" -eq 8 ]
   must grep -qxF 'min_version = "2026.11.3"' "$_mt"
   must [ "$(grep -c '^\[' "$_mt" || true)" -eq 1 ]
   must grep -qxF '[tools]' "$_mt"
   must grep -qxF 'shellcheck = "0.11.0"' "$_mt"
   # [env]、[hooks]、[tasks]、[plugins] は書かない。
+  must [ "$(grep -cE '^\[(env|hooks|tasks|plugins)\]' "$_mt" || true)" -eq 0 ]
+}
+
+# T2632: mise.toml は min_version と [tools] の6ツール（shellcheck、actionlint、gitleaks、bats、jq、yq）だけを持つ。
+# Why: [tasks]、[hooks]、[env]、[plugins] は任意の実行や環境の書き換えを持ち込むため、レビューなしに入れない。
+t_mise_toml_is_restricted() {
+  _mt=$ROOT/mise.toml
+  # 非コメントの行は min_version、[tools]、6ツールの8行だけ。
+  must [ "$(grep -cvE '^(#|$)' "$_mt" || true)" -eq 8 ]
+  must grep -qxF 'min_version = "2026.11.3"' "$_mt"
+  must [ "$(grep -c '^\[' "$_mt" || true)" -eq 1 ]
+  must grep -qxF '[tools]' "$_mt"
+  must grep -qxF 'shellcheck = "0.11.0"' "$_mt"
+  must grep -qxF 'actionlint = "1.7.12"' "$_mt"
+  must grep -qxF 'gitleaks = "8.30.1"' "$_mt"
+  must grep -qxF 'bats = "1.14.0"' "$_mt"
+  must grep -qxF 'jq = "1.8.2"' "$_mt"
+  must grep -qxF 'yq = "4.54.2"' "$_mt"
+  must [ "$(grep -cE '^(shellcheck|actionlint|gitleaks|bats|jq|yq) = ' "$_mt" || true)" -eq 6 ]
   must [ "$(grep -cE '^\[(env|hooks|tasks|plugins)\]' "$_mt" || true)" -eq 0 ]
 }
 
@@ -2774,7 +2793,7 @@ t_wf_each_step_runs_its_command() {
   printf '%s\n' "$_sc" | grep -Fq 'MISE_AUTO_INSTALL=false' || return 1
   printf '%s\n' "$_sc" | grep -Fq -- '-s sh -S style' || return 1
   # mise-action の step は install_args で --locked を渡し、導入を mise.lock に従わせる。
-  wf_block 'uses: jdx/mise-action@' | grep -qE '^          install_args: .*--locked' || return 1
+  wf_block 'uses: jdx/mise-action@' | grep -qxF '          install_args: --locked' || return 1
   wf_block '- name: unit$' | grep -qxF '        run: sh tests/m09-execution-and-ci.sh unit' || return 1
   wf_block '- name: test-ci$' | grep -qxF '        run: npm run test:ci && sh scripts/e2e.sh test:ci normal error-500-then-200 ratelimit-429 slow-5000' || return 1
   wf_block '- name: smoke$' | grep -qxF '        run: sh tests/m09-execution-and-ci.sh smoke' || return 1
@@ -3865,6 +3884,7 @@ run_unit() {
   check '各ステップは計画どおりの入口を1つだけ呼ぶ' t_wf_each_step_runs_its_command
   check 'docker compose と docker-compose を呼ばない' t_wf_has_no_docker_compose_call
   check 'shellcheck の設定と mise.toml は必要な行だけを持つ（disable、[tasks]、[hooks]、[env] なし）' t_shellcheck_config_and_mise_toml_are_restricted
+  check 'mise.toml は min_version と [tools] の6ツールだけを持つ（[tasks]、[hooks]、[env]、[plugins] なし）' t_mise_toml_is_restricted
   check 'test-ci の検査列に M08 の4シナリオが直列で入り、専用の step は増えない' t_ci_test_ci_scenarios
   if python3 -c 'import yaml' >/dev/null 2>&1; then
     check 'workflow は YAML として読め、形が一致する' t_wf_yaml_parses_with_expected_shape
