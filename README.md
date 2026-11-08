@@ -141,6 +141,7 @@ E2E スイートの実行方法、4シナリオの期待値、失敗時の見方
 - shellcheck（mise で導入する。版は `mise.toml` と `mise.lock` で固定。品質ゲートが毎回検査する）
 - actionlint、gitleaks、bats、jq、yq（mise で導入する。版は `mise.toml` と `mise.lock` で固定）
   `mise install --locked` で入る。bats はソースのアーカイブから入る。jq と yq は JSON と YAML を読む検査の前提である。
+  bats の検査（`tests/bats/`）は、`sh tests/<名前>.sh` の入口から従来どおり実行する。入口の使い方は変わらない。
 
 導入と版の固定、CI の step は [ローカル実行とCI](docs/ローカル実行とCI.md) を参照する。
 

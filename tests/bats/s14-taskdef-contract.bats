@@ -1,0 +1,145 @@
+#!/usr/bin/env bats
+# S14 の契約検査（unit）。Docker を使わず、固定の ACL 行、派生設定の構文、WireMock の読み取り専用、
+# Squid のホスト非公開、許可ドメインの固定を確かめる。
+# 入口は tests/s14-taskdef-contract.sh（tests/lib/run-bats.sh を呼ぶ）。
+
+load 'helpers/common'
+
+setup() {
+  ROOT=$(cd "$BATS_TEST_DIRNAME/../.." && pwd)
+  cd "$ROOT" || return 1
+  common_setup_tmp
+  # docker を呼んだら記録する偽物を、PATH の先頭に置く。この検査が Docker に触れないことを、記録で確かめる。
+  mkdir -p "$TMP/bin"
+  printf '#!/bin/sh\necho "docker $*" >>"%s"\nexit 1\n' "$TMP/docker-calls" >"$TMP/bin/docker"
+  chmod +x "$TMP/bin/docker"
+  PATH="$TMP/bin:$PATH"
+  export PATH
+}
+
+# 検査が docker を呼んでいないことを確かめる。各 @test の最後で呼ぶ（検査の数を5件に保つため、独立の @test にしない）。
+s14_assert_no_docker() {
+  [ ! -e "$TMP/docker-calls" ] || { printf '%s\n' 'FAIL: 検査が docker を呼んだ' >&2; return 1; }
+}
+
+# 固定の ACL 行。送信元の範囲と許可・拒否の行を、完全一致で確かめる。
+s14_acl_lines() {
+  _c=squid-config/squid.conf
+  grep -Fxq -- 'acl local_src src 127.0.0.0/8 10.0.0.0/8 172.16.0.0/12 192.168.0.0/16' "$_c" || return 1
+  grep -Fxq -- 'http_access allow local_src api_domains' "$_c" || return 1
+  grep -Fxq -- 'http_access deny all' "$_c" || return 1
+  grep -Fxq -- 'cache deny all' "$_c" || return 1
+  # 送信元を見ない旧い許可行が残ると、範囲外の送信元が許可ドメインへ届くため、行の数と併せて確かめる。
+  [ "$(grep -c '^http_access ' "$_c")" -eq 2 ] || return 1
+  ! grep -Fxq -- 'http_access allow api_domains' "$_c"
+}
+
+# 派生設定の構文の静的検査。Squid を起動せず、派生の結果の指令名を派生元と照らす。
+# Why: squid -k parse は Docker が要るため、ここでは派生の出力が既知の指令だけで書かれていることを確かめる。
+s14_derived_config_parse() {
+  _src=squid-config/squid.conf
+  _mock=$TMP/derived-mock.conf
+  _direct=$TMP/derived-direct.conf
+  SQUID_UPSTREAM=mock SQUID_MOCK_HOST=swsc-wiremock SQUID_MOCK_PORT=8080 \
+    sh ecs/squid/derive-config.sh "$_src" "$_mock" || return 1
+  SQUID_UPSTREAM=direct sh ecs/squid/derive-config.sh "$_src" "$_direct" || return 1
+
+  # mock は転送先の行を1つだけ持ち、派生元の転送行は残らない。
+  [ "$(grep -c '^cache_peer ' "$_mock")" -eq 1 ] || return 1
+  grep -Fxq -- 'cache_peer swsc-wiremock parent 8080 0 no-query name=wiremock' "$_mock" || return 1
+  grep -Fxq -- 'cache_peer_access wiremock allow api_domains' "$_mock" || return 1
+  # direct は転送の行が無く、直接接続の行を持つ。
+  [ "$(grep -c '^cache_peer' "$_direct" || true)" -eq 0 ] || return 1
+  grep -Fxq -- 'always_direct allow api_domains' "$_direct" || return 1
+
+  # 有効な行（空行と # のコメントを除く）の先頭語を集める。派生元の指令名に、派生で足す always_direct を加えた集合だけを許す。
+  _allowed=$TMP/allowed.txt
+  grep -Ev '^[[:space:]]*(#|$)' "$_src" | awk '{ print $1 }' | sort -u >"$_allowed"
+  printf '%s\n' always_direct >>"$_allowed"
+  for _f in "$_mock" "$_direct"; do
+    _names=$TMP/names.txt
+    grep -Ev '^[[:space:]]*(#|$)' "$_f" | awk '{ print $1 }' | sort -u >"$_names"
+    [ -z "$(grep -vxFf "$_allowed" "$_names" || true)" ] || return 1
+  done
+
+  # 不正な値は、派生の前に拒否する（設定へ別の指示を混ぜないため）。
+  if SQUID_UPSTREAM=bogus sh ecs/squid/derive-config.sh "$_src" "$TMP/bad1.conf" >/dev/null 2>&1; then
+    return 1
+  fi
+  if SQUID_UPSTREAM=mock SQUID_MOCK_HOST='a b' SQUID_MOCK_PORT=8080 \
+    sh ecs/squid/derive-config.sh "$_src" "$TMP/bad2.conf" >/dev/null 2>&1; then
+    return 1
+  fi
+  return 0
+}
+
+# WireMock のシナリオは、読み取り専用（:ro）で1回だけ渡す。書き込み可能な宛先で渡すと、検査の前提が崩れるため。
+s14_mapping_readonly() {
+  _r=scripts/e2e-runner.sh
+  [ "$(grep -c 'wiremock-scenarios' "$_r" || true)" -eq 1 ] || return 1
+  [ "$(grep -c '/home/wiremock' "$_r" || true)" -eq 1 ] || return 1
+  grep -Fxq -- "    -v \"\$SWSC_ROOT/wiremock-scenarios:/home/wiremock:ro\" \\" "$_r"
+}
+
+# Squid はホストへ公開しない。taskdef から作った docker run の引数に公開の指定が無く、
+# ランナーのホスト公開は WireMock の 127.0.0.1:8080 だけであることを確かめる。
+s14_squid_not_published() {
+  _tpl=ecs/task-definition.template.json
+  _taskdef=$TMP/taskdef.json
+  _run=$TMP/run
+  python3 -B scripts/e2e-taskdef.py render --template "$_tpl" --out "$_taskdef" \
+    --client-image swsc-client:e2e --squid-image swsc-squid:e2e \
+    --profile local --upstream mock --mock-host swsc-wiremock --mock-port 8080 >/dev/null 2>&1 || return 1
+  mkdir -p "$_run"
+  python3 -B scripts/e2e-taskdef.py docker-args --taskdef "$_taskdef" --out-dir "$_run" \
+    --pause-name swsc-pause --run-id 4242 >/dev/null 2>&1 || return 1
+  [ -f "$_run/swsc-squid.args" ] || return 1
+  ! grep -Eq -- '^(-p|-P|--publish|--publish-all)' "$_run/swsc-squid.args" || return 1
+  ! grep -Eq -- ':3128' "$_run/swsc-squid.args" || return 1
+  # ランナーの公開指定は、数字で始まる -p（空白なしの -p8080:8080 も含む docker run の公開）の1件だけで、127.0.0.1 の 8080 に限る。
+  # mkdir -p のような別のコマンドの -p は数えない。
+  # Why: grep -c は行の数を数え、同じ行の2つ目の -p を見落とすため、一致した数を数える。
+  [ "$(grep -Eo -- ' -p ?[0-9]' scripts/e2e-runner.sh | wc -l | tr -d ' ')" -eq 1 ] || return 1
+  grep -Fq -- ' -p 127.0.0.1:8080:8080' scripts/e2e-runner.sh || return 1
+  # -P と --publish-all は全ポートを全インターフェースへ公開するため、ランナーに置かない。
+  ! grep -Eq -- ' -P( |$)|--publish|3128:|0\.0\.0\.0:' scripts/e2e-runner.sh
+}
+
+# 許可ドメインは、有効な行（空行と # のコメントを除く）が2件だけで、内容も固定する。
+# Why: 行を足すと、SQUID_UPSTREAM=direct のときに、レビューを経ずに外部への通信先が広がるため（旧 S14 の検査を引き継ぐ）。
+s14_allowlist_fixed() {
+  _w=squid-config/whitelist.txt
+  _got=$(grep -Ev '^[[:space:]]*(#|$)' "$_w" | sort)
+  _want=$(printf '%s\n' api-staging.example.com api.example.com | sort)
+  [ "$_got" = "$_want" ]
+}
+
+# bats test_tags=unit
+@test "s14_acl_lines: 固定の ACL 行と許可・拒否の行が規定どおり" {
+  s14_acl_lines
+  s14_assert_no_docker
+}
+
+# bats test_tags=unit
+@test "s14_derived_config_parse: 派生設定の指令が既知の指令だけで、不正な値を拒否する" {
+  s14_derived_config_parse
+  s14_assert_no_docker
+}
+
+# bats test_tags=unit
+@test "s14_mapping_readonly: WireMock のシナリオが読み取り専用で渡される" {
+  s14_mapping_readonly
+  s14_assert_no_docker
+}
+
+# bats test_tags=unit
+@test "s14_squid_not_published: Squid の 3128 がホストへ公開されない" {
+  s14_squid_not_published
+  s14_assert_no_docker
+}
+
+# bats test_tags=unit
+@test "s14_allowlist_fixed: 許可ドメインが api.example.com と api-staging.example.com の2件だけ" {
+  s14_allowlist_fixed
+  s14_assert_no_docker
+}

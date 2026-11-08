@@ -90,6 +90,13 @@ shellcheck_gate() {
     # Why: 先頭が - のファイル名を shellcheck にオプションとして解釈させないため、-- で区切る。
     run xargs -0 "$actual_path" -s sh -S style -- <"$tmp_list"
   fi
+  # .bats は bash の方言で検査する。shellcheck に bats の方言は無い（U12）。@test の本体は bash として読める。
+  if ! git ls-files -z -co --exclude-standard '*.bats' '*.bash' >"$tmp_list"; then
+    printf '%s\n' 'FAILED: git ls-files が失敗した（.bats と .bash）' >&2
+    status=1
+  elif [ -s "$tmp_list" ]; then
+    run xargs -0 "$actual_path" -s bash -S style -- <"$tmp_list"
+  fi
   rm -f "$tmp_list"
   trap - EXIT
   trap - INT TERM
@@ -158,6 +165,12 @@ if ! resolve_tool jq 's/^jq-//p' --version; then
   status=1
 fi
 
+# bats の実体と版は、tests/bats/ と tests/lib/run-bats.sh の検査より前に、版の照合だけを行う。
+# Why: 未導入や版違いを、後段の .bats の実行より前に、導入手順つきで失敗させるため。
+if ! resolve_tool bats 's/^Bats //p' --version; then
+  status=1
+fi
+
 # yq は使う側の検査（M09 の構造比較）より前に、版の照合だけを先頭で行う。
 # Why: 版違いや未導入を、後段の失敗より前に導入手順つきで示すため。
 if ! resolve_tool yq 's/.*version v//p' --version; then
@@ -181,7 +194,18 @@ if has_match '^(Dockerfile|squid-config/|wiremock-scenarios/|test-client/|tests/
   # M02〜M08 は自分で起動と停止を行い、ロック、trap、cleanup を持つ。稼働中のスタックは前提にしない。
   for test in tests/m02-routing-smoke.sh tests/m03-wiremock-scenarios.sh tests/m04-test-client.sh tests/m05-proxy-integration.sh tests/m06-client-resilience.sh tests/m07-scenario-isolation.sh tests/m08-e2e-suite.sh; do
     [ -f "$test" ] || continue
-    if has_match "^$test\$|^(Dockerfile|squid-config/|wiremock-scenarios/|test-client/|scripts/scenario-lib\.sh)"; then
+    # 入口の sh は、対応する tests/bats/ の .bats を run-bats.sh で呼ぶ。.bats の変更で入口を走らせる。
+    case "$test" in
+      tests/m02-routing-smoke.sh) bats_file=tests/bats/m02-routing-smoke.bats ;;
+      tests/m03-wiremock-scenarios.sh) bats_file=tests/bats/m03-wiremock-scenarios.bats ;;
+      tests/m04-test-client.sh) bats_file=tests/bats/m04-test-client.bats ;;
+      tests/m05-proxy-integration.sh) bats_file=tests/bats/m05-proxy-integration.bats ;;
+      tests/m06-client-resilience.sh) bats_file=tests/bats/m06-client-resilience.bats ;;
+      tests/m07-scenario-isolation.sh) bats_file=tests/bats/m07-scenario-isolation.bats ;;
+      tests/m08-e2e-suite.sh) bats_file=tests/bats/m08-e2e-suite.bats ;;
+    esac
+    # tests/bats/helpers/ と run-bats.sh の変更は、すべての入口に影響するため、全件を走らせる。
+    if has_match "^$test\$|^$bats_file\$|^tests/bats/helpers/|^tests/lib/run-bats.sh$|^(Dockerfile|squid-config/|wiremock-scenarios/|test-client/|scripts/scenario-lib\.sh)"; then
       run sh "$test"
     fi
   done
@@ -202,7 +226,7 @@ fi
 # Why: tests/m09-execution-and-ci.sh は引数なしだと smoke を既定にするため、既存の for ループに混ぜると
 # モードを明示せずに Docker を使ってしまう。unit と smoke を、この順に別の run で呼ぶ。
 # Why not: contract は、ダミー認証情報の環境変数が要り、エージェントのシェルでは設定できないため登録しない。
-if has_match '^(scripts/e2e|scripts/lib/|ecs/|tests/m09-execution-and-ci\.sh$|\.github/workflows/e2e-test\.yml$|docs/ローカル実行とCI\.md$|package\.json$|\.gitignore$|mise\.toml$|mise\.lock$|\.gitleaks\.toml$|squid-config/|test-client/|wiremock-scenarios/|Dockerfile)'; then
+if has_match '^(scripts/e2e|scripts/lib/|ecs/|tests/m09-execution-and-ci\.sh$|\.github/workflows/e2e-test\.yml$|docs/ローカル実行とCI\.md$|package\.json$|\.gitignore$|mise\.toml$|mise\.lock$|\.gitleaks\.toml$|tests/bats/m09-execution-and-ci.bats$|tests/bats/helpers/|tests/lib/run-bats.sh$|squid-config/|test-client/|wiremock-scenarios/|Dockerfile)'; then
   printf '%s\n' 'NOTE: tests/m09-execution-and-ci.sh contract は利用者の端末と CI だけで実行するため、ゲートでは実行しない'
   run sh tests/m09-execution-and-ci.sh unit
   run sh tests/m09-execution-and-ci.sh smoke

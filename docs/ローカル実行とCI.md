@@ -585,3 +585,24 @@ gitleaks は作業ツリーの走査であり、収集物の実行時のマス�
 実行時に部品を連結して組み立て、一時ディレクトリへ書く。値は実在しない形のダミーに限る。
 検査の終わりに、作った一時ディレクトリを絶対パスで削除する。
 規則の説明の文書にも、値の形の例を書かない。形の説明だけを書く。
+
+## bats-core のテスト（S14、M02〜M05、M03、M07、M08、M09 の一部）
+
+S14、M02、M03、M04、M05 の検査は、`tests/bats/*.bats` にある。入口は従来のまま（`sh tests/<名前>.sh [モード]`）である。
+
+| 入口 | 検査の中身 | モード |
+| --- | --- | --- |
+| `tests/s14-taskdef-contract.sh unit` | `tests/bats/s14-taskdef-contract.bats` | `unit` |
+| `tests/m02-routing-smoke.sh` | `tests/bats/m02-routing-smoke.bats` | Docker の `smoke` |
+| `tests/m03-wiremock-scenarios.sh [unit\|smoke]` | `tests/bats/m03-wiremock-scenarios.bats` | `unit`（Docker なし）、`smoke` |
+| `tests/m04-test-client.sh` | `tests/bats/m04-test-client.bats` | Docker の `smoke` |
+| `tests/m05-proxy-integration.sh` | `tests/bats/m05-proxy-integration.bats` | Docker の `smoke` |
+
+- 実行は `tests/lib/run-bats.sh` が行う。固定版の bats を `resolve_tool` で照合してから動かす。
+  `bats` が無い、または版が違う場合は、導入手順つきで失敗する（`mise install --locked`）。
+- 検査は、タグで絞り込む（`# bats test_tags=unit` または `smoke`）。`unit` は Docker を使わず、`smoke` は WireMock と Squid が起動した後で使う。
+- 同じ検査名は、旧の検査名をそのまま使う。対応表は `specs/R02-R05-tool-replacement/verification/phase-4-mapping.md` にある。
+- 信号の検査（INT、TERM の終了コード）は、入口の trap が後始末を行い、子の bats に信号を送る。
+  `teardown_file` は TERM では動かないため、後始末を `teardown_file` に頼らない（U15）。
+- bash の前提: Linux（bash 5.2）で動くことを確かめた。macOS の bash 3.2 は、利用者の端末で確かめる（T-R0293）。未確認。
+- 品質ゲートは、`bats` の実体と版を JSON や YAML の検査より前に照合する。`.bats` と `.bash` は `shellcheck -s bash` で検査する。

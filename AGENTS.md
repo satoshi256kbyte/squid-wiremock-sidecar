@@ -296,3 +296,15 @@ Spec Kit前半、implement、レビューを独立した工程として起動す
 6. `implement`
 
 未決事項や要件カバレッジに問題がない場合も、`clarify`と`analyze`を実施する。
+
+## テストの書き方（bats-core）
+
+新しく書くテストは、bats-core（`tests/bats/*.bats`）で書く。
+`tests/bats/helpers/` の共通部品（`common.bash`、`fakes.bash`）を `load` で読む。
+`bats-support` と `bats-assert` は使わない。検査は素のシェルの終了コードで判定する。
+
+- 入口は `sh tests/<名前>.sh [モード]` のまま変えない。入口は、起動と停止、引数の検査、`tests/lib/run-bats.sh` の呼び出しだけを持つ。
+- `tests/lib/run-bats.sh` は検査の中身を持たない。bats の実体と版を固定版（`resolve_tool`）で照合し、bats を起動し、終了コードを返す。
+  INT と TERM は bats に伝えてから止まる。bats の `teardown_file` は TERM では動かないため、後始末は入口の trap で行う。
+- 前面のシェルで実行する前提である。背景や nohup で起動すると、SIGINT の検査が失敗する（`common_require_foreground` が確かめる）。
+- 品質ゲートの表の M02〜M05、S14 の行は、入口が変わらないため、そのまま使う。

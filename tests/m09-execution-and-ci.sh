@@ -73,43 +73,9 @@ check() { # 名前 関数
   fi
 }
 
-# 必要なツールだけを束ねたPATHを作る。docker、aws、docker-compose は含めない。
-make_base_bin() { # 出力先
-  mkdir -p "$1"
-  for _t in sh env python3 curl grep sed awk cat cp mv rm rmdir mkdir chmod cmp diff sort head tail tr wc dirname basename ls find mktemp sleep date; do
-    _p=$(command -v "$_t" 2>/dev/null || true)
-    case $_p in
-      /*) ln -sf "$_p" "$1/$_t" ;;
-    esac
-  done
-  # Why: python3 を mise のシムのまま使うと、HOME を空の一時ディレクトリにした検査の中で、
-  # 毎回 Python を取得し直して約18秒かかる。導入済みの実体を指すようにする。
-  _real=$(python3 -c 'import sys; print(sys.executable)' 2>/dev/null || true)
-  case $_real in
-    /*) ln -sf "$_real" "$1/python3" ;;
-  esac
-}
-
-# 呼ばれたら引数を記録して成功する偽物を作る。
-make_fake() { # 名前 置き場 記録先
-  mkdir -p "$2"
-  printf '#!/bin/sh\necho "%s $*" >>"%s"\nexit 0\n' "$1" "$3" >"$2/$1"
-  chmod +x "$2/$1"
-}
-
-# 偽の docker、aws、docker-compose を入れたPATHを作る（記録は $TMP/rec-*）。
-make_shims() { # 置き場
-  make_fake docker "$1" "$TMP/rec-docker"
-  make_fake aws "$1" "$TMP/rec-aws"
-  make_fake docker-compose "$1" "$TMP/rec-compose"
-}
-
-no_calls() { # 記録が空、または無いこと
-  for _f in "$TMP"/rec-*; do
-    [ ! -e "$_f" ] || [ ! -s "$_f" ] || return 1
-  done
-  return 0
-}
+# 偽の docker、aws などの用意（make_base_bin など4つ）は、tests/bats/helpers/fakes.bash の1か所にある（T-R0278）。
+# shellcheck source=/dev/null
+. "$ROOT/tests/bats/helpers/fakes.bash"
 
 # 入口を、環境変数を外した状態で起動する。Why: 利用者の AWS 設定が検査に混ざるのを防ぐため。
 run_e2e() { # PATH 操作...
@@ -3104,6 +3070,44 @@ t_gate_checks_jq_first() {
   return 0
 }
 
+# T-R0274: bats の偽の docker、aws などの用意（make_base_bin など4つ）は、
+# tests/bats/helpers/fakes.bash の1か所だけで定義する。
+t_bats_helpers_define_fakes_once() {
+  for _fn in make_base_bin make_fake make_shims no_calls; do
+    _hits=$(grep -rlE "^${_fn}\(\) \{" "$ROOT/tests" 2>/dev/null || true)
+    [ "$_hits" = "$ROOT/tests/bats/helpers/fakes.bash" ] || return 1
+  done
+}
+
+# T-R0274: 旧の入口 tests/lib/run-bats.sh は、引数の数とモードを検査し、不正なら終了コード2で止まる。
+t_run_bats_entry_keeps_interface() {
+  _r=$ROOT/tests/lib/run-bats.sh
+  [ -f "$_r" ] || return 1
+  must rc_is 2 sh "$_r"
+  must rc_is 2 sh "$_r" bogus-mode
+  # 第1引数に実在する .bats を渡し、第2引数の不正なモードだけを検査する（モードの検査の分岐を通すため）。
+  must rc_is 2 sh "$_r" "$ROOT/tests/bats/s14-taskdef-contract.bats" bogus-mode
+}
+
+# T-R0274: 品質ゲートは、JSON や YAML の検査より前に、bats の実体と版を確かめる。
+t_gate_checks_bats_first() {
+  _gf=$ROOT/scripts/quality-gate.sh
+  _bl=$(grep -n "^if ! resolve_tool bats 's/^Bats //p' --version; then" "$_gf" | head -1 | cut -d: -f1)
+  _yq=$(grep -n '^if ! resolve_tool yq ' "$_gf" | head -1 | cut -d: -f1)
+  [ -n "$_bl" ] && [ -n "$_yq" ] && [ "$_bl" -lt "$_yq" ]
+}
+
+# T-R0274: M02〜M09 の実行条件は、対応する tests/bats/<名前>.bats の変更でも走り、
+# tests/bats/helpers/ と tests/lib/run-bats.sh の変更は、このゲートの対象に入る。
+t_gate_triggers_cover_bats_paths() {
+  _gf=$ROOT/scripts/quality-gate.sh
+  grep -Fq 'tests/bats/helpers/' "$_gf" && grep -Fq 'tests/lib/run-bats.sh' "$_gf" || return 1
+  for _t in m02-routing-smoke m03-wiremock-scenarios m04-test-client m05-proxy-integration \
+    m06-client-resilience m07-scenario-isolation m08-e2e-suite m09-execution-and-ci; do
+    grep -Fq "tests/bats/${_t}.bats" "$_gf" || return 1
+  done
+}
+
 # swsc_count_api_requests（jq）は、接頭辞 /api/ の URL だけを数える。固定の入力で件数を確かめる。
 t_count_api_requests_counts_only_api_urls() {
   printf '%s' '{"requests":[{"request":{"url":"/api/a"}},{"request":{"url":"/squid-internal-periodic/x"}},{"request":{"url":"/api/b"}}]}' \
@@ -4154,6 +4158,10 @@ run_unit() {
   check '品質ゲートは、JSON の検査より前に jq の実体と版を確かめる' t_gate_checks_jq_first
   check 'JSON の値の取り出しは jq へ移し、json.load は mutate() の中だけに残す' t_json_extraction_uses_jq
   check 'swsc_count_api_requests は /api/ で始まる URL の件数だけを数える' t_count_api_requests_counts_only_api_urls
+  check 'bats の偽の用意（4つの関数）は tests/bats/helpers/fakes.bash の1か所だけ' t_bats_helpers_define_fakes_once
+  check 'run-bats.sh は引数の数とモードを検査し、不正なら終了コード2' t_run_bats_entry_keeps_interface
+  check '品質ゲートは bats の実体と版を、yq より前に確かめる' t_gate_checks_bats_first
+  check 'M02〜M09 の実行条件は tests/bats の変更でも対応するテストを走らせる' t_gate_triggers_cover_bats_paths
   check '.gitleaks.toml は useDefault、トップレベルの [allowlist]、stopwords を持たない' t_gitleaks_config_has_no_global_allowlist
   check 'gitleaks の段2の3規則は実行時に組み立てた値を検出し、値を出さない' t_gitleaks_rules_detect_runtime_built_values
   check 'gitleaks の段1の path 規則は FR-R0210 の11ファイルに当たり、対象外のパスには当たらない' t_gitleaks_path_rules_cover_eleven_files

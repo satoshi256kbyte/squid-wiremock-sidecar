@@ -621,10 +621,10 @@ R01の8.1節と同じ手順で、リポジトリの`mise.toml`を書き換えず
 | U9 | gitleaksの規則の機能 | `[[rules.allowlists]]`の`condition = "AND"`と`paths`、`regexes`が、8.30.1で使えるか。`path`のみの規則（正規表現の`path`）の書き方 | commit 2 | 未確認 |
 | U10 | 2段の規則の最終形と、除外が要る行 | 実測で検出の一覧を取り、8.2節の表を埋める。0件の可能性もある | commit 2 | 確認済み（既存の範囲の検出は0件。除外は不要。`verification/phase-2-results.md` 3章） |
 | U11 | actionlintと`shellcheck` | 既存の`run:`で指摘が出るか。`shellcheck`がPATHに無いときの挙動。`-ignore`が要るか。`run:`の形（引数の渡し方） | commit 1 | 未確認 |
-| U12 | `.bats`をshellcheckの対象に含めるか | `shellcheck -s bats`が0.11.0で使えるか。使えなければ`.bash`の補助だけを`-s bash`で検査する | commit 4 | 未確認 |
-| U13 | `bats --filter-tags`と`test_tags` | 1.14.0で使えるか。`unit`、`smoke`、`contract`の絞り込みで、旧のモードと同じ件数になるか | commit 4 | 未確認 |
-| U14 | `sh`の入口からbatsを呼ぶときのbash | macOSのbash 3.2と、ubuntuのbashで動くか。batsの要求するbashの版 | commit 4（macOSは利用者の端末） | 未確認 |
-| U15 | `BATS_TEST_TMPDIR`と`setup_file`の使い方 | 一時ディレクトリの置き方。信号を受けたときの`teardown_file`の挙動 | commit 4 | 未確認 |
+| U12 | `.bats`をshellcheckの対象に含めるか | `shellcheck -s bats`が0.11.0で使えるか。使えなければ`.bash`の補助だけを`-s bash`で検査する | commit 4 | 確認済み: `-s bats`は無い。`-s bash`で`.bats`を検査でき、`.bats`を対象に含める（`phase-4-results.md` 1.1） |
+| U13 | `bats --filter-tags`と`test_tags` | 1.14.0で使えるか。`unit`、`smoke`、`contract`の絞り込みで、旧のモードと同じ件数になるか | commit 4 | 確認済み: 絞り込みは使える。件数はタグで数えられる（`phase-4-results.md` 1.2） |
+| U14 | `sh`の入口からbatsを呼ぶときのbash | macOSのbash 3.2と、ubuntuのbashで動くか。batsの要求するbashの版 | commit 4（macOSは利用者の端末） | 一部確認: Linux（bash 5.2）で動く。macOS（bash 3.2）は未確認で、T-R0293 で確かめる（`phase-4-results.md` 1.3） |
+| U15 | `BATS_TEST_TMPDIR`と`setup_file`の使い方 | 一時ディレクトリの置き方。信号を受けたときの`teardown_file`の挙動 | commit 4 | 確認済み: TERM では`teardown_file`が動かず、子の`sleep`が孤児になる。後始末は入口の trap で行う（`phase-4-results.md` 1.4） |
 | U16 | 直列のスクリプト（m02、m04、m05）の`@test`の区切り | 旧の出力の単位で区切る。旧に`check`が無いため、件数の定義を決める | commit 4 | 未確認 |
 | U17 | m09の件数のずれ | 静的な行数は227、`clarify.md`は234で、どちらも仮の数字。一方を正とせず、実機の旧の出力で、モード別の実行時の件数を数えて確定する。234の出所（静的な数え方では再現できていない）も記録する | commit 7の開始時 | 未確認 |
 | U18 | 実行時間 | actionlint、gitleaks、batsの追加分。段階ごとの旧と新。CIのjob全体が15分に収まるか。stepの合計の上限はjobの15分を超え得る | 各commit、初回のCI | 未確認 |
