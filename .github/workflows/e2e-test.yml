@@ -42,6 +42,10 @@ jobs:
         # Why: 自動の導入を止める2つの環境変数は、mise which にだけ付ける。git ls-files には効かないため。
         run: git ls-files -z '*.sh' | xargs -0 "$(MISE_EXEC_AUTO_INSTALL=false MISE_AUTO_INSTALL=false mise which shellcheck)" -s sh -S style --
         timeout-minutes: 3
+      # Why: actionlint は mise の固定版を使う。-shellcheck に同じ版の shellcheck を渡し、run: のシェルも検査する。
+      - name: actionlint
+        run: '"$(MISE_EXEC_AUTO_INSTALL=false MISE_AUTO_INSTALL=false mise which actionlint)" -shellcheck "$(MISE_EXEC_AUTO_INSTALL=false MISE_AUTO_INSTALL=false mise which shellcheck)" .github/workflows/e2e-test.yml'
+        timeout-minutes: 2
       # Why: ローカルと同じく、unit を test:ci より先に置く。unit が落ちたら Docker は動かさない（FR-914）。
       - name: unit
         run: sh tests/m09-execution-and-ci.sh unit

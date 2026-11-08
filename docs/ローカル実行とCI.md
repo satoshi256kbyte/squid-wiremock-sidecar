@@ -478,3 +478,35 @@ CI の上限（`shellcheck` step の3分）は、CI の実測の約9秒に対し
 | 版違いの失敗（期待と違う版を入れた状態で、ゲートが `FAILED:` で止まる） | 未確認。利用者の端末で確かめる |
 | macOS での mise の導入（Homebrew）と `mise install --locked` | 未確認。利用者の端末で確かめ、結果をこの節に書く |
 | `mise-action` の `install_args` が `--locked` を重複させないこと | 初回 CI の前にソースで確かめた。結果は検証の記録にある |
+
+## actionlint と構造比較（フェーズ1）
+
+### actionlint の step
+
+CI の `actionlint` step は、`shellcheck` の次、`unit` の前に動く。上限は2分である。
+実体は `mise which actionlint` と `mise which shellcheck` で得る。自動の導入は、
+`MISE_EXEC_AUTO_INSTALL=false` と `MISE_AUTO_INSTALL=false` で止める。
+
+- `-shellcheck` に、mise の固定版の shellcheck の実体を渡す。`run:` のシェルも同じ版で検査する。
+- `run:` は1行で、式（`${{`）を含めない。
+- 現在のワークフローは、`-shellcheck` を付けても付けなくても終了コード0で通る（U11の結果）。
+
+品質ゲートの `actionlint` は、`.github/workflows/` の全ワークフローを検査する。
+ファイルの一覧は `git ls-files` の結果を一時ファイルへ書き、0件は失敗にする。
+CI の step は `e2e-test.yml` だけを検査する。
+
+### 契約の検査（yq による構造比較）
+
+M09 の unit は、ワークフローを `yq -e` で読み、契約ごとに1つの式で比べる。
+
+- `yq -e` は、結果が `null` または `false` のとき終了コード1で終わる。
+- PyYAML の分岐（`import yaml` と、SKIP の表示）は削除する。
+- `yq` の実体は `mise which yq` で得る。版は、Markdown のゲートの前に、固定版と照合する。
+
+### actionlint と yq の実行時間
+
+| 検査 | 実測 |
+| --- | --- |
+| `actionlint` step（CI、上限2分） | 未反映 |
+| 品質ゲート（actionlint と yq を追加した後） | 未反映 |
+| M09 unit（構造比較へ置き換えた後） | 未反映 |

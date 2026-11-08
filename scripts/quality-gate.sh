@@ -7,6 +7,8 @@ set -eu
 base_ref="${QUALITY_GATE_BASE:-origin/main}"
 repo_root=$(git rev-parse --show-toplevel)
 cd "$repo_root"
+# 版の照合の関数（resolve_tool）を読み込む。読み込んでも、コマンドは実行されない。
+. "$repo_root/scripts/lib/resolve-tool.sh"
 
 # 基点が解決できない場合は、比較を省いて成功にせず停止する
 if ! git rev-parse --verify -q "$base_ref" >/dev/null 2>&1; then
@@ -64,35 +66,11 @@ run git -c core.quotepath=off diff --check "$base_ref"...HEAD
 # Why: mise の取得は if ! で受ける。var=$(...) で直接受けると set -e で止まり、導入手順を出せないため。
 # Why: git ls-files は一時ファイルへ書いて終了コードを見る。パイプにすると git の失敗が隠れ、空の一覧が通るため。
 shellcheck_gate() {
-  if ! command -v mise >/dev/null 2>&1; then
-    printf '%s\n' 'FAILED: miseが未導入。miseを導入し、mise install --lockedを実行する（docs/ローカル実行とCI.md）' >&2
+  if ! resolve_tool shellcheck 's/^version: //p' --version; then
     status=1
     return 0
   fi
-  if ! expected=$(MISE_EXEC_AUTO_INSTALL=false MISE_AUTO_INSTALL=false MISE_LOCKED=1 mise current shellcheck 2>/dev/null) \
-    || [ -z "$expected" ]; then
-    printf '%s\n' 'FAILED: shellcheckの期待する版を mise current で得られない。mise install --lockedを実行する' >&2
-    status=1
-    return 0
-  fi
-  if ! actual_path=$(MISE_EXEC_AUTO_INSTALL=false MISE_AUTO_INSTALL=false MISE_LOCKED=1 mise which shellcheck 2>/dev/null) \
-    || [ -z "$actual_path" ]; then
-    printf '%s\n' 'FAILED: shellcheckが未導入。mise install --lockedを実行する' >&2
-    status=1
-    return 0
-  fi
-  if ! version_out=$("$actual_path" --version); then
-    printf '%s\n' 'FAILED: shellcheck --version が失敗した。mise install --lockedを実行する' >&2
-    status=1
-    return 0
-  fi
-  actual=$(printf '%s\n' "$version_out" | sed -n 's/^version: //p')
-  if [ "$actual" != "$expected" ]; then
-    printf 'FAILED: shellcheckの版が期待と異なる（期待 %s、実際 %s）。mise install --lockedを実行する\n' \
-      "$expected" "$actual" >&2
-    status=1
-    return 0
-  fi
+  actual_path=$RESOLVED_PATH
   if ! tmp_list=$(mktemp); then
     printf '%s\n' 'FAILED: 一時ファイルを作れない' >&2
     status=1
@@ -117,6 +95,49 @@ shellcheck_gate() {
   trap - INT TERM
 }
 shellcheck_gate
+
+# GitHub Actions のワークフローを、固定版の actionlint で検査する。
+# Why: -shellcheck に固定版の shellcheck の実体を渡し、run: のシェルも同じ版で検査する。
+# Why: 一覧は一時ファイルへ書いて終了コードを見る。空の一覧は成功にしない（shellcheck_gate と同じ）。
+actionlint_gate() {
+  if ! resolve_tool actionlint '1p' -version; then
+    status=1
+    return 0
+  fi
+  actionlint_path=$RESOLVED_PATH
+  if ! resolve_tool shellcheck 's/^version: //p' --version; then
+    status=1
+    return 0
+  fi
+  shellcheck_path=$RESOLVED_PATH
+  if ! tmp_list=$(mktemp); then
+    printf '%s\n' 'FAILED: 一時ファイルを作れない' >&2
+    status=1
+    return 0
+  fi
+  trap 'rm -f "$tmp_list"' EXIT
+  trap 'exit 130' INT
+  trap 'exit 143' TERM
+  if ! git ls-files -z -co --exclude-standard '.github/workflows/*.yml' '.github/workflows/*.yaml' >"$tmp_list"; then
+    printf '%s\n' 'FAILED: git ls-files が失敗した' >&2
+    status=1
+  elif [ ! -s "$tmp_list" ]; then
+    printf '%s\n' 'FAILED: 検査対象のワークフローが0件。空の一覧は成功にしない' >&2
+    status=1
+  else
+    run xargs -0 "$actionlint_path" -shellcheck "$shellcheck_path" -- <"$tmp_list"
+  fi
+  rm -f "$tmp_list"
+  trap - EXIT
+  trap - INT TERM
+}
+actionlint_gate
+
+# yq は使う側の検査（M09 の構造比較）より前に、版の照合だけを先頭で行う。
+# Why: 版違いや未導入を、後段の失敗より前に導入手順つきで示すため。
+if ! resolve_tool yq 's/.*version v//p' --version; then
+  status=1
+fi
 
 # Markdownゲート: 固定版のmarkdownlint-cli2で全Markdownを検査する。
 # 設定ファイルや依存の変更でも、規則の影響を確認するため実行する。
@@ -156,7 +177,7 @@ fi
 # Why: tests/m09-execution-and-ci.sh は引数なしだと smoke を既定にするため、既存の for ループに混ぜると
 # モードを明示せずに Docker を使ってしまう。unit と smoke を、この順に別の run で呼ぶ。
 # Why not: contract は、ダミー認証情報の環境変数が要り、エージェントのシェルでは設定できないため登録しない。
-if has_match '^(scripts/e2e|ecs/|tests/m09-execution-and-ci\.sh$|\.github/workflows/e2e-test\.yml$|docs/ローカル実行とCI\.md$|package\.json$|\.gitignore$|squid-config/|test-client/|wiremock-scenarios/|Dockerfile)'; then
+if has_match '^(scripts/e2e|scripts/lib/|ecs/|tests/m09-execution-and-ci\.sh$|\.github/workflows/e2e-test\.yml$|docs/ローカル実行とCI\.md$|package\.json$|\.gitignore$|mise\.toml$|mise\.lock$|\.gitleaks\.toml$|squid-config/|test-client/|wiremock-scenarios/|Dockerfile)'; then
   printf '%s\n' 'NOTE: tests/m09-execution-and-ci.sh contract は利用者の端末と CI だけで実行するため、ゲートでは実行しない'
   run sh tests/m09-execution-and-ci.sh unit
   run sh tests/m09-execution-and-ci.sh smoke

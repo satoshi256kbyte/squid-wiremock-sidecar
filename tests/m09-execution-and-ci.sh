@@ -2633,36 +2633,25 @@ PY
 
 # ---------------------------------------------------------------------------
 # T915: CIワークフロー（.github/workflows/e2e-test.yml）の静的検査。
-# PyYAML に依存せず grep と awk で行う。構文の読み込みだけは PyYAML があるときに別に行う。
+# 検査は yq（mikefarah/yq、mise which の実体）で YAML を構造比較する。PyYAML は使わない。
 # Why: CI の実行は GitHub 上でしか確かめられないため、手元では設定の取り違えを静的に固定する。
 # ---------------------------------------------------------------------------
 
 WF=$ROOT/.github/workflows/e2e-test.yml
 
-# ステップの見出し（- name: や - uses:）に一致するステップのブロックを出す。
-wf_block() { # 見出しの正規表現
-  awk -v re="$1" '/^      - /{on = ($0 ~ re)} on' "$WF"
-}
-
-# 完全一致の行が、ワークフローにあるか。
-wf_has_line() { # 行
-  grep -qxF -- "$1" "$WF"
-}
-
-# トップレベルのキーのブロック（次のトップレベルのキーまで）を出す。
-wf_top_block() { # キー名（コロンを除く）
-  awk -v key="$1" '$0 == key ":" {f=1; next} /^[^ ]/{f=0} f' "$WF"
-}
-
-# ステップ名に対応する timeout-minutes の値。無ければ空。
-wf_step_timeout() { # ステップ名
-  awk -v want="$1" '
-    /^      - /{ cur = ""; if ($0 ~ /^      - name: /) { cur = $0; sub(/^      - name: /, "", cur) } }
-    /^        timeout-minutes: /{ if (cur == want) { print $2; exit } }' "$WF"
+# yq の実体を出す。mise の自動導入を止めて mise which で得る。得られなければ失敗する（mise exec は使わない）。
+# Why: PATH 上の別の yq を使わないため（clarify.md 3章、R01 と同じ方針）。
+wf_yq_bin() {
+  _y=$(cd "$ROOT" && MISE_EXEC_AUTO_INSTALL=false MISE_AUTO_INSTALL=false MISE_LOCKED=1 mise which yq 2>/dev/null) || return 1
+  [ -x "$_y" ] || return 1
+  printf '%s\n' "$_y"
 }
 
 t_wf_file_exists() {
-  [ -f "$WF" ]
+  [ -f "$WF" ] || return 1
+  # YAML として読めることを yq で確かめる。読めなければ失敗する。
+  _y=$(wf_yq_bin) || return 1
+  "$_y" -e 'has("jobs")' "$WF" >/dev/null
 }
 
 # T2631: shellcheck の設定（.shellcheckrc）と mise の設定（mise.toml）を、必要な行だけに制限する。
@@ -2704,133 +2693,225 @@ t_mise_toml_is_restricted() {
 
 t_wf_triggers_are_pull_request_and_main_push_only() {
   # pull_request は全ブランチ向けでフィルタ無し。push は main のみ。パスの絞り込みは無い（FR-913）。
-  [ "$(wf_top_block on)" = "$(printf '  pull_request:\n  push:\n    branches: [main]')" ]
+  # on は YAML 1.2 として文字列のキーで読まれる。pull_request の値は null（子キーを持たない）。
+  _y=$(wf_yq_bin) || return 1
+  "$_y" -e '(.on | keys | join(",")) == "pull_request,push" and (.on.pull_request == null) and (.on.push | keys | join(",")) == "branches" and (.on.push.branches | length) == 1 and .on.push.branches[0] == "main"' "$WF" >/dev/null
 }
 
 t_wf_permissions_are_contents_read_only() {
-  [ "$(wf_top_block permissions)" = '  contents: read' ] && [ "$(grep -c '^permissions:' "$WF")" -eq 1 ]
+  # トップレベルの権限は contents だけで read。job に別の権限を持たせない。
+  _y=$(wf_yq_bin) || return 1
+  "$_y" -e '(.permissions | keys | join(",")) == "contents" and .permissions.contents == "read" and (.jobs.e2e | has("permissions") | not)' "$WF" >/dev/null
 }
 
 t_wf_job_runs_on_ubuntu_2404_with_15_minute_limit() {
-  wf_has_line '    runs-on: ubuntu-24.04' && wf_has_line '    timeout-minutes: 15'
+  _y=$(wf_yq_bin) || return 1
+  # -e で null と false を失敗にする。runs-on と job 全体の timeout-minutes を、値で比べる。
+  "$_y" -e '.jobs.e2e."runs-on" == "ubuntu-24.04" and .jobs.e2e."timeout-minutes" == 15' "$WF" >/dev/null
 }
 
-t_wf_step_timeouts_are_shellcheck3_unit3_test_ci10_smoke8_contract5() {
-  [ "$(wf_step_timeout shellcheck)" = 3 ] && [ "$(wf_step_timeout unit)" = 3 ] \
-    && [ "$(wf_step_timeout test-ci)" = 10 ] \
-    && [ "$(wf_step_timeout smoke)" = 8 ] && [ "$(wf_step_timeout contract)" = 5 ]
+t_wf_step_timeouts_are_shellcheck3_actionlint2_unit3_test_ci10_smoke8_contract5() {
+  _y=$(wf_yq_bin) || return 1
+  "$_y" -e '(.jobs.e2e.steps[] | select(.name == "shellcheck") | ."timeout-minutes" == 3) and (.jobs.e2e.steps[] | select(.name == "actionlint") | ."timeout-minutes" == 2) and (.jobs.e2e.steps[] | select(.name == "unit") | ."timeout-minutes" == 3) and (.jobs.e2e.steps[] | select(.name == "test-ci") | ."timeout-minutes" == 10) and (.jobs.e2e.steps[] | select(.name == "smoke") | ."timeout-minutes" == 8) and (.jobs.e2e.steps[] | select(.name == "contract") | ."timeout-minutes" == 5)' "$WF" >/dev/null
 }
 
 t_wf_dummy_credentials_are_workflow_env_only() {
   # Why: ダミー値はワークフローの env だけに置く。ステップごとに書くと、どの経路で値が出るかを追えなくなるため。
-  [ "$(wf_top_block env)" = "$(printf '  AWS_ACCESS_KEY_ID: test\n  AWS_SECRET_ACCESS_KEY: test\n  AWS_DEFAULT_REGION: ap-northeast-1')" ] \
-    && [ "$(grep -c '^ *env:$' "$WF" || true)" -eq 1 ]
+  # job と各 step に env が無いことも、構造で確かめる。
+  _y=$(wf_yq_bin) || return 1
+  "$_y" -e '(.env | keys | join(",")) == "AWS_ACCESS_KEY_ID,AWS_SECRET_ACCESS_KEY,AWS_DEFAULT_REGION" and .env.AWS_ACCESS_KEY_ID == "test" and .env.AWS_SECRET_ACCESS_KEY == "test" and .env.AWS_DEFAULT_REGION == "ap-northeast-1" and (.jobs.e2e | has("env") | not) and ([.jobs.e2e.steps[] | select(has("env"))] | length) == 0' "$WF" >/dev/null
 }
 
 t_wf_concurrency_groups_pr_by_ref_and_pushes_by_sha() {
-  # shellcheck disable=SC2016 # ワークフローの YAML の値として ${{ }} を文字どおり比べる。GitHub Actions の式を展開させない意図。
-  _g='  group: ${{ github.workflow }}-${{ github.event_name == '"'"'pull_request'"'"' && github.ref || github.sha }}'
-  # shellcheck disable=SC2016 # ワークフローの YAML の値として ${{ }} を文字どおり比べる。GitHub Actions の式を展開させない意図。
-  _c='  cancel-in-progress: ${{ github.event_name == '"'"'pull_request'"'"' }}'
-  [ "$(wf_top_block concurrency)" = "$(printf '%s\n%s' "$_g" "$_c")" ]
+  # 式の文字列は環境変数で yq に渡し（strenv）、YAML の値として文字どおり比べる。GitHub Actions の式は展開しない。
+  # shellcheck disable=SC2016 # 単一引用符の中の ${{ }} は、GitHub Actions の式として文字どおり比べるための値。
+  _g='${{ github.workflow }}-${{ github.event_name == '"'"'pull_request'"'"' && github.ref || github.sha }}'
+  # shellcheck disable=SC2016 # 同上。
+  _c='${{ github.event_name == '"'"'pull_request'"'"' }}'
+  _y=$(wf_yq_bin) || return 1
+  WF_CONC_GROUP=$_g WF_CONC_CANCEL=$_c "$_y" -e '(.concurrency | keys | join(",")) == "group,cancel-in-progress" and .concurrency.group == strenv(WF_CONC_GROUP) and .concurrency."cancel-in-progress" == strenv(WF_CONC_CANCEL)' "$WF" >/dev/null
 }
 
 t_wf_collect_always_upload_on_failure_stop_always() {
-  wf_block '- name: collect$' | grep -qxF '        if: always()' || return 1
-  wf_block 'uses: actions/upload-artifact@' | grep -qxF '        if: failure()' || return 1
-  wf_block '- name: stop$' | grep -qxF '        if: always()'
+  _y=$(wf_yq_bin) || return 1
+  "$_y" -e '(.jobs.e2e.steps[] | select(.name == "collect") | .if == "always()") and (.jobs.e2e.steps[] | select(.name == "stop") | .if == "always()") and (.jobs.e2e.steps[] | select((.uses // "") | test("^actions/upload-artifact@")) | .if == "failure()")' "$WF" >/dev/null
 }
 
 t_wf_uploads_logs_with_fixed_name_path_and_seven_day_retention() {
-  _b=$(wf_block 'uses: actions/upload-artifact@')
-  # shellcheck disable=SC2016 # ワークフローの YAML の行として ${{ }} を文字どおり一致させる。GitHub Actions の式を展開させない意図。
-  printf '%s\n' "$_b" | grep -qxF '          name: e2e-logs-${{ github.run_id }}-${{ github.run_attempt }}' || return 1
-  printf '%s\n' "$_b" | grep -qxF '          path: e2e-logs/' || return 1
-  printf '%s\n' "$_b" | grep -qxF '          retention-days: 7'
+  # upload-artifact の with を、キーの数と値で比べる。name は式を含むため、文字どおりの値として比べる。
+  _y=$(wf_yq_bin) || return 1
+  # shellcheck disable=SC2016 # yq の式の中の ${{ }} は、ワークフローの値として文字どおり比べる。GitHub Actions の式を展開させない意図。
+  # 注意: yq では | と and の結び付きが式の書き方で変わるため、with の中身を括弧で囲んで比べる。
+  "$_y" -e '.jobs.e2e.steps[] | select((.uses // "") | test("^actions/upload-artifact@")) | .with | ((length == 4) and .name == "e2e-logs-${{ github.run_id }}-${{ github.run_attempt }}" and .path == "e2e-logs/" and .["retention-days"] == 7 and .["if-no-files-found"] == "warn")' "$WF" >/dev/null
 }
 
 t_wf_never_reads_secrets_context() {
-  [ "$(grep -cE 'secrets[.:]' "$WF" || true)" -eq 0 ]
+  # Why: Secrets を読むと、フォークからの PR に値を渡す経路が生まれるため。
+  # 値とキーの全体で secrets の参照を探す。コメントは YAML の値ではないため対象外。
+  _y=$(wf_yq_bin) || return 1
+  # キー名 secrets（値の中の文字列でなく、マップのキーとして現れるもの）も、どこにも無いことを確かめる。
+  "$_y" -e '([.. | select(tag == "!!str") | select(test("secrets[.:]"))] | length) == 0 and (has("secrets") | not) and (.jobs.e2e | has("secrets") | not) and ([.. | select(tag == "!!map") | keys | .[] | select(. == "secrets")] | length) == 0' "$WF" >/dev/null
 }
 
 t_wf_run_lines_have_no_expression_or_block_scalar() {
   # Why: run: へ入力や式を展開すると、値がシェルの構文として解釈されるため（インジェクション）。
-  [ "$(grep -cE '^[[:space:]]*run:.*[$][{][{]' "$WF" || true)" -eq 0 ] \
-    && [ "$(grep -cE 'run: [|>]' "$WF" || true)" -eq 0 ]
+  # 各 step の run の値を読み、式（${{）、複数行（| や >、改行を含む値）が無いことを確かめる。
+  _y=$(wf_yq_bin) || return 1
+  # shellcheck disable=SC2016 # yq の式の中の ${{ }} は、run の値に含まれないことを確かめるための文字列。
+  "$_y" -e '[.jobs.e2e.steps[] | select(has("run")) | .run | select(contains("\n") or style == "literal" or style == "folded" or contains("${{"))] | length == 0' "$WF" >/dev/null
 }
 
 t_wf_expressions_only_in_concurrency_and_artifact_name() {
-  [ -z "$(grep -n '[$][{][{]' "$WF" | grep -vE 'group:|cancel-in-progress:|name: e2e-logs-' || true)" ]
+  # 式（${{）を持つ値は3つだけで、concurrency の group と cancel-in-progress、upload-artifact の name の値であること。
+  _y=$(wf_yq_bin) || return 1
+  # shellcheck disable=SC2016 # yq の式の中の ${{ }} は、式を持つ値の文字列として比べる。GitHub Actions の式を展開させない意図。
+  "$_y" -e '([.. | select(tag == "!!str") | select(contains("${{"))] | length) == 3 and (.concurrency.group | contains("${{")) and (.concurrency."cancel-in-progress" | contains("${{")) and ((.jobs.e2e.steps[] | select((.uses // "") | test("^actions/upload-artifact@")) | .with.name) | contains("${{"))' "$WF" >/dev/null
 }
 
 t_wf_uses_checkout_mise_action_and_upload_artifact() {
-  [ "$(grep -cE '^[[:space:]]*(- )?uses:' "$WF" || true)" -eq 3 ] || return 1
+  _y=$(wf_yq_bin) || return 1
+  # uses の並びは action の名前（版の @ より前）で比べる。job 直下に uses は無い。
+  "$_y" -e '(.jobs.e2e | has("uses") | not) and ([.jobs.e2e.steps[] | select(has("uses")) | (.uses | sub("@.*$"; ""))] | join(",")) == "actions/checkout,jdx/mise-action,actions/upload-artifact"' "$WF" >/dev/null || return 1
   # Why: タグ（@v7）は付け替えられる。40桁のコミット SHA で固定されていることを確かめる（security-review の Low）。
+  "$_y" -e '([.jobs.e2e.steps[] | select(has("uses")) | .uses | select(test("^[^@]+@[0-9a-f]{40}$"))] | length) == 3' "$WF" >/dev/null || return 1
+  # 版のコメント（# v7.0.1 など）は YAML の値ではなく構造で読めないため、grep -Eq のまま確かめる。
   grep -qE '^      - uses: actions/checkout@[0-9a-f]{40} # v[0-9]+' "$WF" || return 1
   grep -qE '^      - uses: jdx/mise-action@[0-9a-f]{40} # v[0-9]+' "$WF" || return 1
   grep -qE '^      - uses: actions/upload-artifact@[0-9a-f]{40} # v[0-9]+' "$WF"
 }
 
 t_wf_checkout_does_not_persist_credentials() {
-  wf_block 'uses: actions/checkout@' | grep -qxF '          persist-credentials: false'
+  _y=$(wf_yq_bin) || return 1
+  "$_y" -e '.jobs.e2e.steps[] | select((.uses // "") | test("^actions/checkout@")) | .with."persist-credentials" == false' "$WF" >/dev/null
 }
 
 t_wf_steps_run_in_plan_order() {
-  _got=$(grep -E '^      - (name|uses): ' "$WF" | sed -E \
-    -e 's/^      - name: //' \
-    -e 's#^      - uses: actions/checkout@.*#checkout#' \
-    -e 's#^      - uses: jdx/mise-action@.*#mise-action#' \
-    -e 's#^      - uses: actions/upload-artifact@.*#upload-artifact#')
-  _want=$(printf 'checkout\nmise-action\nshellcheck\nunit\ntest-ci\nsmoke\ncontract\ncollect\nupload-artifact\nstop')
-  [ "$_got" = "$_want" ]
+  # uses の step は名前の代わりに action の名前（版の @ より前）で数える。
+  _y=$(wf_yq_bin) || return 1
+  _got=$("$_y" -r '[.jobs.e2e.steps[] | (.name // (.uses | sub("@.*$"; "")))] | join(",")' "$WF") || return 1
+  [ "$_got" = "actions/checkout,jdx/mise-action,shellcheck,actionlint,unit,test-ci,smoke,contract,collect,actions/upload-artifact,stop" ]
 }
 
 t_wf_each_step_runs_its_command() {
+  _y=$(wf_yq_bin) || return 1
   # 静的解析の step は mise which の実体で、自動の導入を止める2つの環境変数を付けて、-s sh -S style で動かす。
-  _sc=$(wf_block '- name: shellcheck$' | grep '^        run: ') || return 1
-  printf '%s\n' "$_sc" | grep -Fq 'mise which shellcheck' || return 1
-  printf '%s\n' "$_sc" | grep -Fq 'MISE_EXEC_AUTO_INSTALL=false' || return 1
-  printf '%s\n' "$_sc" | grep -Fq 'MISE_AUTO_INSTALL=false' || return 1
-  printf '%s\n' "$_sc" | grep -Fq -- '-s sh -S style' || return 1
+  "$_y" -e '.jobs.e2e.steps[] | select(.name == "shellcheck") | .run | (contains("mise which shellcheck") and contains("MISE_EXEC_AUTO_INSTALL=false") and contains("MISE_AUTO_INSTALL=false") and contains("-s sh -S style"))' "$WF" >/dev/null || return 1
+  # actionlint の step は、期待する1行と値で完全に比べる（部分一致では、余分な引数や取り違えを見逃すため）。
+  # 期待値は .github/workflows/e2e-test.yml の actionlint step の run: の値そのもの。strenv で渡し、式は展開しない。
+  # shellcheck disable=SC2016 # 単一引用符の中の $( ) と " は、YAML の run: の値として文字どおり比べるための文字列。
+  _al='"$(MISE_EXEC_AUTO_INSTALL=false MISE_AUTO_INSTALL=false mise which actionlint)" -shellcheck "$(MISE_EXEC_AUTO_INSTALL=false MISE_AUTO_INSTALL=false mise which shellcheck)" .github/workflows/e2e-test.yml'
+  WF_RUN_AL=$_al "$_y" -e '.jobs.e2e.steps[] | select(.name == "actionlint") | .run == strenv(WF_RUN_AL)' "$WF" >/dev/null || return 1
   # mise-action の step は install_args で --locked を渡し、導入を mise.lock に従わせる。
-  wf_block 'uses: jdx/mise-action@' | grep -qxF '          install_args: --locked' || return 1
-  wf_block '- name: unit$' | grep -qxF '        run: sh tests/m09-execution-and-ci.sh unit' || return 1
-  wf_block '- name: test-ci$' | grep -qxF '        run: npm run test:ci && sh scripts/e2e.sh test:ci normal error-500-then-200 ratelimit-429 slow-5000' || return 1
-  wf_block '- name: smoke$' | grep -qxF '        run: sh tests/m09-execution-and-ci.sh smoke' || return 1
-  wf_block '- name: contract$' | grep -qxF '        run: sh tests/m09-execution-and-ci.sh contract' || return 1
-  wf_block '- name: collect$' | grep -qxF '        run: sh scripts/e2e.sh collect' || return 1
-  wf_block '- name: stop$' | grep -qxF '        run: npm run stop'
+  "$_y" -e '.jobs.e2e.steps[] | select((.uses // "") | test("^jdx/mise-action@")) | .with.install_args == "--locked"' "$WF" >/dev/null || return 1
+  "$_y" -e '.jobs.e2e.steps[] | select(.name == "unit") | .run == "sh tests/m09-execution-and-ci.sh unit"' "$WF" >/dev/null || return 1
+  "$_y" -e '.jobs.e2e.steps[] | select(.name == "test-ci") | .run == "npm run test:ci && sh scripts/e2e.sh test:ci normal error-500-then-200 ratelimit-429 slow-5000"' "$WF" >/dev/null || return 1
+  "$_y" -e '.jobs.e2e.steps[] | select(.name == "smoke") | .run == "sh tests/m09-execution-and-ci.sh smoke"' "$WF" >/dev/null || return 1
+  "$_y" -e '.jobs.e2e.steps[] | select(.name == "contract") | .run == "sh tests/m09-execution-and-ci.sh contract"' "$WF" >/dev/null || return 1
+  "$_y" -e '.jobs.e2e.steps[] | select(.name == "collect") | .run == "sh scripts/e2e.sh collect"' "$WF" >/dev/null || return 1
+  "$_y" -e '.jobs.e2e.steps[] | select(.name == "stop") | .run == "npm run stop"' "$WF" >/dev/null
 }
 
 # T2622: M08 の4シナリオは test-ci の検査列に直列で入る。専用の step は増やさない（ステップの順序は変えない）。
 t_ci_test_ci_scenarios() {
-  _b=$(wf_block '- name: test-ci$') || return 1
+  _y=$(wf_yq_bin) || return 1
   # 既存の test:ci が先、4シナリオの test:ci が後。失敗したら後は動かない（&&）。
-  printf '%s\n' "$_b" | grep -qxF '        run: npm run test:ci && sh scripts/e2e.sh test:ci normal error-500-then-200 ratelimit-429 slow-5000' || return 1
-  # 専用の step を増やしていないこと。名前付きの step は計画どおり6件（checkout と upload は uses で数えない）。
-  [ "$(grep -cE '^      - name: ' "$WF")" -eq 7 ] || return 1
-  # job 名と required status check の名前（e2e、既存の step 名）は変わらない。
-  wf_has_line '  e2e:' && wf_has_line '      - name: smoke' && wf_has_line '      - name: contract'
+  "$_y" -e '.jobs.e2e.steps[] | select(.name == "test-ci") | .run == "npm run test:ci && sh scripts/e2e.sh test:ci normal error-500-then-200 ratelimit-429 slow-5000"' "$WF" >/dev/null || return 1
+  # 専用の step を増やしていないこと。名前付きの step は計画どおり8件（checkout と upload は uses で数えない）。
+  "$_y" -e '([.jobs.e2e.steps[] | select(has("name"))] | length) == 8' "$WF" >/dev/null || return 1
+  # job 名と required status check の名前（e2e、既存の step 名 smoke と contract）は変わらない。
+  "$_y" -e '(.jobs | has("e2e")) and ([.jobs.e2e.steps[] | select(.name == "smoke" or .name == "contract")] | length) == 2' "$WF" >/dev/null
 }
 
 t_wf_has_no_docker_compose_call() {
-  [ "$(grep -cE 'docker[- ]compose' "$WF" || true)" -eq 0 ]
+  _y=$(wf_yq_bin) || return 1
+  "$_y" -e '([.. | select(tag == "!!str") | select(test("docker[- ]compose"))] | length) == 0' "$WF" >/dev/null
 }
 
 t_wf_yaml_parses_with_expected_shape() {
-  python3 -B -c '
-import sys
-import yaml
+  # YAML として読めることと、形（runner、job 名、job 全体の timeout、権限、トリガー、step 数11）を yq で確かめる。
+  # on は文字列のキーとして読まれる（yq は YAML 1.2 で on を真偽値に変えない）。
+  _y=$(wf_yq_bin) || return 1
+  "$_y" -e '.jobs.e2e."runs-on" == "ubuntu-24.04" and .jobs.e2e."timeout-minutes" == 15 and (.permissions | keys | join(",")) == "contents" and .permissions.contents == "read" and (.on | has("pull_request")) and (.on.push | keys | join(",")) == "branches" and .on.push.branches[0] == "main" and (.jobs.e2e.steps | length) == 11' "$WF" >/dev/null
+}
 
-d = yaml.safe_load(open(sys.argv[1], encoding="utf-8"))
-on = d.get("on", d.get(True))
-job = d["jobs"]["e2e"]
-names = [s.get("name") or s.get("uses", "") for s in job["steps"]]
-ok = job["runs-on"] == "ubuntu-24.04" and job["timeout-minutes"] == 15 \
-    and d["permissions"] == {"contents": "read"} and "pull_request" in on \
-    and on.get("push") == {"branches": ["main"]} and len(names) == 10
-sys.exit(0 if ok else 1)
-' "$WF"
+# 壊した定義1件を一時ファイルへ作り、対応する検査が落ちることを確かめる。
+wf_broken_case() { # 件名 sedの式 検査の関数
+  _f=$_wf_broken_dir/$1.yml
+  sed -e "$2" "$WF" >"$_f" || return 1
+  # 壊し方が効いていなければ、検査が落ちても意味が無いため失敗にする。
+  if diff -q "$WF" "$_f" >/dev/null 2>&1; then return 1; fi
+  # 検査は部分シェルで、WF を一時ファイルへ向けて読む。リポジトリのワークフローは変えない。
+  # shellcheck disable=SC2030 # WF の変更は部分シェルの中だけに閉じる。意図どおり、親の WF は変えない。
+  if (WF=$_f; "$3") >/dev/null 2>&1; then return 1; fi
+  return 0
+}
+
+# T2633: 7.4節の壊した定義の10件を、一時ファイルで作り、対応する検査が落ちることを確かめる。
+# Why: 検査が壊れた定義を見ずに通ってしまうことを防ぐため。判定は yq の構造比較の検査で行う。
+# Why: 作業ファイルは $KIROCREW_SCRATCH（無ければ $TMPDIR か /tmp）の mktemp -d の下に置き、検査の終わりに1つずつ消す。
+t_wf_broken_definitions_fail() {
+  _base=${KIROCREW_SCRATCH:-${TMPDIR:-/tmp}}
+  mkdir -p "$_base" || return 1
+  _wf_broken_dir=$(mktemp -d "$_base/wf-broken.XXXXXX") || return 1
+  _bad=0
+  wf_broken_case permissions 's/^  contents: read$/  contents: write/' t_wf_permissions_are_contents_read_only || _bad=1
+  wf_broken_case timeout '/^      - name: unit$/,/timeout-minutes/{s/timeout-minutes: 3/timeout-minutes: 4/}' \
+    t_wf_step_timeouts_are_shellcheck3_actionlint2_unit3_test_ci10_smoke8_contract5 || _bad=1
+  wf_broken_case if-always '/^      - name: collect$/,/run:/{/if: always()/d}' \
+    t_wf_collect_always_upload_on_failure_stop_always || _bad=1
+  wf_broken_case sha-pin 's|actions/checkout@[0-9a-f]\{40\} # v7.0.1|actions/checkout@v4|' \
+    t_wf_uses_checkout_mise_action_and_upload_artifact || _bad=1
+  # shellcheck disable=SC2016 # sed の式の中の ${{ }} は、ワークフローの文字列として書く。展開させない意図。
+  wf_broken_case secrets 's|^        run: sh tests/m09-execution-and-ci.sh smoke$|        run: sh tests/m09-execution-and-ci.sh smoke ${{ secrets.X }}|' \
+    t_wf_never_reads_secrets_context || _bad=1
+  # 名前の入れ替え（unit と test-ci の名前を互いに置き換える）で、stepの並びを入れ替える。
+  wf_broken_case step-order 's/^      - name: unit$/      - name: @@TMP@@/; s/^      - name: test-ci$/      - name: unit/; s/^      - name: @@TMP@@$/      - name: test-ci/' \
+    t_wf_steps_run_in_plan_order || _bad=1
+  # pull_request を pull_request_target に変えて、トリガーを変える。
+  wf_broken_case trigger 's/^  pull_request:$/  pull_request_target:/' t_wf_triggers_are_pull_request_and_main_push_only || _bad=1
+  wf_broken_case persist-credentials 's/persist-credentials: false/persist-credentials: true/' \
+    t_wf_checkout_does_not_persist_credentials || _bad=1
+  # shellcheck disable=SC2016 # sed の式の中の ${{ }} は、ワークフローの文字列として書く。展開させない意図。
+  wf_broken_case expression 's|^        run: sh tests/m09-execution-and-ci.sh smoke$|        run: sh tests/m09-execution-and-ci.sh smoke ${{ github.x }}|' \
+    t_wf_run_lines_have_no_expression_or_block_scalar || _bad=1
+  wf_broken_case retention 's/retention-days: 7/retention-days: 30/' \
+    t_wf_uploads_logs_with_fixed_name_path_and_seven_day_retention || _bad=1
+  # 作ったファイルを1つずつ消してから、空の場所を消す（rm -rf は使わない）。
+  for _f in "$_wf_broken_dir"/*.yml; do
+    if [ -e "$_f" ]; then rm -f "$_f" || _bad=1; fi
+  done
+  rmdir "$_wf_broken_dir" || _bad=1
+  [ "$_bad" -eq 0 ]
+}
+
+# T2634: actionlint は式の誤りで失敗し、現在のワークフローでは成功する（永続する回帰検査）。
+# Why: actionlint が式を読めなくなると、CI の静的検査が何も止めないまま通るため。
+t_actionlint_rejects_expression_error() {
+  # mise は、いまのディレクトリの mise.toml で版を決めるため、リポジトリの根で呼ぶ。
+  _al=$(cd "$ROOT" && MISE_EXEC_AUTO_INSTALL=false MISE_AUTO_INSTALL=false MISE_LOCKED=1 mise which actionlint 2>/dev/null) || return 1
+  [ -n "$_al" ] || return 1
+  _base=${KIROCREW_SCRATCH:-${TMPDIR:-/tmp}}
+  mkdir -p "$_base" || return 1
+  _d=$(mktemp -d "$_base/actionlint-expr.XXXXXX") || return 1
+  _bad_wf=$_d/expr-error.yml
+  # shellcheck disable=SC2016 # 単一引用符の here-document の中の ${{ }} は、式の文字列として書く。展開させない意図。
+  cat >"$_bad_wf" <<'EOF'
+on: push
+jobs:
+  e2e:
+    runs-on: ubuntu-24.04
+    steps:
+      - run: echo ${{ does.not.exist }}
+EOF
+  "$_al" "$_bad_wf" >/dev/null 2>&1
+  _bad_rc=$?
+  # shellcheck disable=SC2031 # ここの WF は親のシェルの値（リポジトリのワークフロー）。部分シェルの変更は及ばない。
+  "$_al" "$WF" >/dev/null 2>&1
+  _ok_rc=$?
+  # 一時のワークフローを1つずつ消してから、空の場所を消す。
+  rm -f "$_bad_wf" || return 1
+  rmdir "$_d" || return 1
+  [ "$_bad_rc" -ne 0 ] && [ "$_ok_rc" -eq 0 ]
 }
 
 # ---------------------------------------------------------------------------
@@ -2975,31 +3056,53 @@ gate_m09_block() {
   awk -v s="$_gif" 'NR >= s { print } NR > s && /^fi$/ { exit }' "$_gf"
 }
 
+# 共通の関数（`resolve_tool`）は `scripts/lib/resolve-tool.sh` にあるため、2つを探す（plan 4.2 節）。
+gate_sources() { cat "$ROOT/scripts/quality-gate.sh" "$ROOT/scripts/lib/resolve-tool.sh"; }
+
 # T2631: 品質ゲートの shellcheck は、mise which の実体を、版を比べて、自動の導入を止めて実行する。
 # Why: PATH 上の別の shellcheck や、mise exec による導入に頼ると、ゲートの結果が環境で変わるため。
 t_gate_runs_shellcheck_with_pinned_options() {
-  _gf=$ROOT/scripts/quality-gate.sh
-  _which=$(grep 'mise which shellcheck' "$_gf" || true)
+  # ゲートは shellcheck を共通の関数（resolve_tool）で照合する。版の照合の本体は関数のファイルにある。
+  gate_sources | grep -Fq 'resolve_tool shellcheck' || return 1
+  _which=$(cat "$ROOT/scripts/lib/resolve-tool.sh" | grep -F 'mise which' || true)
   must [ -n "$_which" ]
   printf '%s\n' "$_which" | grep -Fq 'MISE_EXEC_AUTO_INSTALL=false' || return 1
   printf '%s\n' "$_which" | grep -Fq 'MISE_AUTO_INSTALL=false' || return 1
   printf '%s\n' "$_which" | grep -Fq 'MISE_LOCKED=1' || return 1
-  grep -Fq -- '--version' "$_gf" || return 1
-  grep -Fq -- '-s sh -S style' "$_gf" || return 1
+  gate_sources | grep -Fq -- '--version' || return 1
+  gate_sources | grep -Fq -- '-s sh -S style' || return 1
   # mise current も、同じ3つの環境変数で自動導入を止めて呼ぶ。
-  _cur=$(grep -F 'mise current shellcheck' "$_gf" || true)
+  _cur=$(cat "$ROOT/scripts/lib/resolve-tool.sh" | grep -F 'mise current' || true)
   must [ -n "$_cur" ]
   printf '%s\n' "$_cur" | grep -Fq 'MISE_EXEC_AUTO_INSTALL=false' || return 1
   printf '%s\n' "$_cur" | grep -Fq 'MISE_AUTO_INSTALL=false' || return 1
   printf '%s\n' "$_cur" | grep -Fq 'MISE_LOCKED=1' || return 1
   # 自動導入の停止と版の不一致の各ガードは、FAILED: の文言を持つ。
-  [ "$(grep -c 'FAILED:' "$_gf" || true)" -ge 2 ] || return 1
+  [ "$(gate_sources | grep -c 'FAILED:' || true)" -ge 2 ] || return 1
   # 検査対象は、ファイルの一覧を NUL 区切りで xargs に渡す。
   # shellcheck disable=SC2016 # 単一引用符の中の $actual_path は、検査対象のファイルの文字列として一致させる。展開させない意図。
-  grep -Fq -- 'xargs -0 "$actual_path"' "$_gf" || return 1
+  gate_sources | grep -Fq -- 'xargs -0 "$actual_path"' || return 1
   # sh -n の loop は shellcheck に置き換えたため残さない。mise exec は使わない。
-  [ "$(grep -cF 'sh -n' "$_gf" || true)" -eq 0 ] || return 1
-  [ "$(grep -cF 'mise exec' "$_gf" || true)" -eq 0 ]
+  [ "$(gate_sources | grep -cF 'sh -n' || true)" -eq 0 ] || return 1
+  [ "$(gate_sources | grep -cF 'mise exec' || true)" -eq 0 ]
+}
+
+# T2633: 品質ゲートは actionlint と yq の実体を mise which で得て、自動の導入を止める3つの環境変数を各行に付ける。
+# Why: 版の固定を、PATH や mise exec の自動導入に任せると、ゲートの結果が環境で変わるため。
+t_gate_runs_pinned_tools() {
+  # 共通の関数（resolve_tool）を、ゲートが actionlint と yq について呼ぶ（plan 4.2 節）。
+  # コメントを除き、行頭の呼び出しとして探す（コメントや文字列の中の一致で通さない）。
+  gate_sources | grep -vE '^[[:space:]]*#' | grep -Fq 'resolve_tool actionlint ' || return 1
+  gate_sources | grep -vE '^[[:space:]]*#' | grep -Fq 'resolve_tool yq ' || return 1
+  # mise which と mise current を呼ぶ行は、共通の関数のファイルにある。コメントを除き、3つの環境変数を必ず付ける。
+  _calls=$(cat "$ROOT/scripts/lib/resolve-tool.sh" | grep -E 'mise (which|current) ' | grep -vE '^[[:space:]]*#' || true)
+  must [ -n "$_calls" ]
+  printf '%s\n' "$_calls" | grep -Fv 'MISE_EXEC_AUTO_INSTALL=false' | grep -q . && return 1
+  printf '%s\n' "$_calls" | grep -Fv 'MISE_AUTO_INSTALL=false' | grep -q . && return 1
+  printf '%s\n' "$_calls" | grep -Fv 'MISE_LOCKED=1' | grep -q . && return 1
+  # mise exec と || true は、コメントを除いて書かない。
+  [ "$(gate_sources | grep -vE '^[[:space:]]*#' | grep -cF 'mise exec' || true)" -eq 0 ] || return 1
+  [ "$(gate_sources | grep -vE '^[[:space:]]*#' | grep -cF '|| true' || true)" -eq 0 ]
 }
 
 t_gate_m09_block_exists_and_is_closed() {
@@ -3870,7 +3973,7 @@ run_unit() {
   check 'トリガーは pull_request（全ブランチ）と、main への push だけ' t_wf_triggers_are_pull_request_and_main_push_only
   check 'permissions は contents: read だけ' t_wf_permissions_are_contents_read_only
   check 'ジョブは ubuntu-24.04 で、timeout-minutes は15' t_wf_job_runs_on_ubuntu_2404_with_15_minute_limit
-  check 'ステップの timeout は shellcheck 3、unit 3、test-ci 10、smoke 8、contract 5' t_wf_step_timeouts_are_shellcheck3_unit3_test_ci10_smoke8_contract5
+  check 'ステップの timeout は shellcheck 3、actionlint 2、unit 3、test-ci 10、smoke 8、contract 5' t_wf_step_timeouts_are_shellcheck3_actionlint2_unit3_test_ci10_smoke8_contract5
   check 'ダミー認証情報は workflow の env だけに、値 test で書く' t_wf_dummy_credentials_are_workflow_env_only
   check 'concurrency は PR で ref、それ以外で SHA を使い、PR だけ取り消す' t_wf_concurrency_groups_pr_by_ref_and_pushes_by_sha
   check 'collect と stop は always、upload は failure で動く' t_wf_collect_always_upload_on_failure_stop_always
@@ -3880,17 +3983,16 @@ run_unit() {
   check '式は concurrency と アーティファクト名の中だけ' t_wf_expressions_only_in_concurrency_and_artifact_name
   check 'uses は checkout と mise-action と upload-artifact の3つだけで、コミットSHAで固定する' t_wf_uses_checkout_mise_action_and_upload_artifact
   check 'checkout は認証情報を保存しない' t_wf_checkout_does_not_persist_credentials
-  check 'ステップの順序は checkout、mise-action、shellcheck、unit、test-ci、smoke、contract、collect、upload、stop' t_wf_steps_run_in_plan_order
+  check 'ステップの順序は checkout、mise-action、shellcheck、actionlint、unit、test-ci、smoke、contract、collect、upload、stop' t_wf_steps_run_in_plan_order
   check '各ステップは計画どおりの入口を1つだけ呼ぶ' t_wf_each_step_runs_its_command
   check 'docker compose と docker-compose を呼ばない' t_wf_has_no_docker_compose_call
+  check '品質ゲートは actionlint と yq を mise which で得て、3つの環境変数を付け、mise exec と || true を使わない' t_gate_runs_pinned_tools
   check 'shellcheck の設定と mise.toml は必要な行だけを持つ（disable、[tasks]、[hooks]、[env] なし）' t_shellcheck_config_and_mise_toml_are_restricted
   check 'mise.toml は min_version と [tools] の6ツールだけを持つ（[tasks]、[hooks]、[env]、[plugins] なし）' t_mise_toml_is_restricted
   check 'test-ci の検査列に M08 の4シナリオが直列で入り、専用の step は増えない' t_ci_test_ci_scenarios
-  if python3 -c 'import yaml' >/dev/null 2>&1; then
-    check 'workflow は YAML として読め、形が一致する' t_wf_yaml_parses_with_expected_shape
-  else
-    printf 'SKIP: PyYAML が無いため、workflow の YAML の読み込みは行わない（成功として数えない）\n'
-  fi
+  check 'workflow は YAML として読め、形が一致する' t_wf_yaml_parses_with_expected_shape
+  check '壊した定義の10件（permissions、timeout、always、SHA、Secrets、並び、trigger、persist、式、保持）は対応する検査が落ちる' t_wf_broken_definitions_fail
+  check 'actionlint は式の誤りで失敗し、現在のワークフローでは成功する' t_actionlint_rejects_expression_error
   printf '== T916 文書（docs/ローカル実行とCI.md、README.md、AGENTS.md）\n'
   check '文書がある' t_doc_file_exists
   check '文書は # 見出しが1つで、先頭行にある' t_doc_has_one_h1_first
