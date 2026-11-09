@@ -28,20 +28,16 @@ setup() {
 }
 
 teardown() {
-  # 直接起動で取ったロックだけを解放する。入口経由のときは入口が解放するため、ここでは触らない。
-  if [ "${_SWSC_LOCK_OWNED:-0}" = 1 ]; then
-    swsc_lock_leave || return 1
-  fi
   common_teardown_tmp
 }
 
-# smoke の信号の検査は、親のロックの下でだけ動かす。入口経由（SWSC_LOCK_HELD=1）ならそのまま使う。
-# 直接起動では、ここで自分がロックを取る。取れなければ、他の実行の swsc- に触れずに失敗する。
+# smoke の信号の検査は、入口（tests/m08-e2e-suite.sh smoke）が取った親のロックの下でだけ動かす。
+# 直接起動（bats を単独で実行）では、ロックを取らずに skip する。ロックを取ると、TERM で止まったときに
+# teardown が動かず、ロックが残るため。
 smoke_require_lock() {
-  if [ "${SWSC_LOCK_HELD:-0}" = 1 ]; then
-    return 0
+  if [ "${SWSC_LOCK_HELD:-0}" != 1 ]; then
+    skip '入口 tests/m08-e2e-suite.sh smoke から実行する（ロックは入口が取る）'
   fi
-  swsc_lock_enter || return 1
 }
 
 # ---- 検査の本体（旧の unit_* 関数。判定は関数の終了コード） ----
@@ -658,4 +654,3 @@ suite_sandbox() { # 作業ディレクトリ
     canned_wm "$_n"
   }
 }
-

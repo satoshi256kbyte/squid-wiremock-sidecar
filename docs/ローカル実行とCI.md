@@ -608,6 +608,7 @@ S14、M02、M03、M04、M05 の検査は、`tests/bats/*.bats` にある。入�
 - M08 の信号の検査は2件（INT の終了コード130、TERM の終了コード143）である。
   `tests/bats/m08-e2e-suite.bats` の `smoke` タグに置き、入口 `tests/m08-e2e-suite.sh smoke` が
   `tests/lib/run-bats.sh` 経由で呼ぶ。子の smoke を起動して信号を送り、後始末（残存と一時ディレクトリ）を確かめる。
+  bats を単独で起動すると、この2件は skip する。ロックは入口だけが取るためである。
   対応表は `specs/R02-R05-tool-replacement/verification/phase-6-mapping.md` の 3 章と 4 章にある。
 - bash の前提: Linux（bash 5.2）で動くことを確かめた。macOS の bash 3.2 は、利用者の端末で確かめる（T-R0293）。未確認。
 - 品質ゲートは、`bats` の実体と版を JSON や YAML の検査より前に照合する。`.bats` と `.bash` は `shellcheck -s bash` で検査する。
