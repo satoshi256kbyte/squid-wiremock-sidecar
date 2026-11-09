@@ -597,6 +597,7 @@ S14、M02、M03、M04、M05 の検査は、`tests/bats/*.bats` にある。入�
 | `tests/m03-wiremock-scenarios.sh [unit\|smoke]` | `tests/bats/m03-wiremock-scenarios.bats` | `unit`（Docker なし）、`smoke` |
 | `tests/m04-test-client.sh` | `tests/bats/m04-test-client.bats` | Docker の `smoke` |
 | `tests/m05-proxy-integration.sh` | `tests/bats/m05-proxy-integration.bats` | Docker の `smoke` |
+| `tests/m08-e2e-suite.sh [unit\|smoke]` | `tests/bats/m08-e2e-suite.bats`。信号の2件は smoke で入口から呼ぶ | `unit`（Docker なし）、`smoke`（Docker） |
 
 - 実行は `tests/lib/run-bats.sh` が行う。固定版の bats を `resolve_tool` で照合してから動かす。
   `bats` が無い、または版が違う場合は、導入手順つきで失敗する（`mise install --locked`）。
@@ -604,5 +605,9 @@ S14、M02、M03、M04、M05 の検査は、`tests/bats/*.bats` にある。入�
 - 同じ検査名は、旧の検査名をそのまま使う。対応表は `specs/R02-R05-tool-replacement/verification/phase-4-mapping.md` にある。
 - 信号の検査（INT、TERM の終了コード）は、入口の trap が後始末を行い、子の bats に信号を送る。
   `teardown_file` は TERM では動かないため、後始末を `teardown_file` に頼らない（U15）。
+- M08 の信号の検査は2件（INT の終了コード130、TERM の終了コード143）である。
+  `tests/bats/m08-e2e-suite.bats` の `smoke` タグに置き、入口 `tests/m08-e2e-suite.sh smoke` が
+  `tests/lib/run-bats.sh` 経由で呼ぶ。子の smoke を起動して信号を送り、後始末（残存と一時ディレクトリ）を確かめる。
+  対応表は `specs/R02-R05-tool-replacement/verification/phase-6-mapping.md` の 3 章と 4 章にある。
 - bash の前提: Linux（bash 5.2）で動くことを確かめた。macOS の bash 3.2 は、利用者の端末で確かめる（T-R0293）。未確認。
 - 品質ゲートは、`bats` の実体と版を JSON や YAML の検査より前に照合する。`.bats` と `.bash` は `shellcheck -s bash` で検査する。

@@ -461,7 +461,7 @@ JSONでない出力（ログの`key=value`の行など）を`sed`で取り出す
 | --- | --- |
 | 引数の検査 | 引数の数とモードの値を検査し、不正なら終了コード2（旧と同じ文言）。この検査は旧のまま入口に残す |
 | bats | `scripts/lib/resolve-tool.sh`の`resolve_tool`を`.`で読み込み、同じ関数で実体と版を得る（4.2節。複製しない）。未導入と版違いは導入手順つきで失敗する |
-| 既定のモード | 引数なしのときの既定を、旧のまま保つ。確認できた旧の既定は、`m06`、`m07`、`m09`が`smoke`（`MODE=${1:-smoke}`）、`s14`が`unit`のみ（`unit`以外は不正）。`m02`〜`m05`、`m08`の既定は未確認で、各段階の開始時（T-R0272、T-R0305）に旧の入口から読み取り、この表に足す。品質ゲートはM02〜M08を引数なしで呼ぶ。`run-bats.sh`と薄い入口は、同じ既定を保つ |
+| 既定のモード | 引数なしのときの既定を、旧のまま保つ。確認できた旧の既定は、`m06`、`m07`、`m09`が`smoke`（`MODE=${1:-smoke}`）、`s14`が`unit`のみ（`unit`以外は不正）。`m08`の既定は`smoke`（`_mode=smoke`。T-R0305で確認し、`verification/phase-6-mapping.md`の1章に記録）。`m02`〜`m05`の既定は未確認で、各段階の開始時（T-R0272）に旧の入口から読み取り、この表に足す。品質ゲートはM02〜M08を引数なしで呼ぶ。`run-bats.sh`と薄い入口は、同じ既定を保つ |
 | 絞り込み | `--filter-tags <mode>`。タグは`# bats test_tags=unit`の形で付ける。`--filter-tags`の対応は13章で確かめる |
 | 終了コード | batsの終了コードをそのまま返す（FR-R0222） |
 | シェル | 入口は`sh`、中身は`bash`。macOSのbash 3.2とubuntuのbashで動くかを13章で確かめる |
@@ -501,7 +501,7 @@ JSONでない出力（ログの`key=value`の行など）を`sed`で取り出す
 | ファイル | 内容 |
 | --- | --- |
 | `tests/m07` | `unit_signal_exit_codes`（約375行）。Pythonの`signal`（約594〜609行） |
-| `tests/m08` | Pythonの`signal`（約932〜950行） |
+| `tests/m08` | 信号の検査は2件（`check`の`INT`と`TERM`、`smoke_case_signal`）。Pythonの`signal`（約949〜1011行）。`kill -INT`、`kill -TERM`は無い（T-R0305で確認） |
 | `tests/m09` | 冒頭の`SIGINT`無視の検査（約27行）。`kill -TERM "$PPID_PARENT"`（約190行）。偽のawsの`kill -INT "$PPID"`、`kill -TERM "$PPID"`（約749行）。`lib_call`経由の`kill`（約1806、1834、1846、1890、3551〜3628行）。Pythonの`signal`（約2171行） |
 
 ### 10.4 shellcheckとの関係
@@ -561,7 +561,7 @@ M09の既存の形で書き、commit 7で移す。
 M09には、`tests/m09-execution-and-ci.sh`自身の行を`grep`で読む検査がある（`smoke_item`と`contract_item`の登録順、`unit`の呼び出し位置など。
 `t_smoke_registers_items_1_to_11_in_order`、`t_contract_registers_c1_to_c6_in_order`、`t_smoke_runs_unit_before_docker`）。
 M09の中でファイル名を参照する行は20行ある（呼び出しを含む。自身の本文を読む検査の全数は未確認）。
-m07、m08などにも、自分や他のテストの本文を読む検査がある可能性がある（未確認）。
+m08には、自分や他のテストの本文を読む検査は無い（T-R0305で確認）。m07は未確認。
 薄い入口にして本体を移すと、読む対象が変わるため、そのままでは0件になって落ちる。次の手順で扱う。
 
 | 手順 | 内容 |
