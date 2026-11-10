@@ -1,7 +1,9 @@
 # ローカル実行とCI
 
 ECS のサイドカー構成（Client、Squid、WireMock）を、ローカルと CI で同じ完成版のタスク定義から起動して検査する。
-入口は `scripts/e2e.sh` で、`npm run` から呼ぶ。検査は `tests/m09-execution-and-ci.sh` にある。
+入口は `scripts/e2e.sh` で、`npm run` から呼ぶ。
+検査は、入口 `tests/m09-execution-and-ci.sh` と、unit の検査（239 件）の `tests/bats/m09-execution-and-ci.bats` にある。
+`unit` は入口が bats を呼んで実行する。smoke と contract の実装は入口にある。
 設計と判定の記録は `specs/M09-execution-and-ci/` にある。
 
 ## 実行方法
