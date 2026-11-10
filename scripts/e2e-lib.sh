@@ -172,10 +172,8 @@ swsc_stage_squid_context() { # 出力先ディレクトリ
   cp "$SWSC_ROOT/ecs/squid/entrypoint.sh" "$1/entrypoint.sh"
 }
 
-# WireMock が受けた /api/ の要求の件数を返す。
-# Why: Squid が起動後に送る /squid-internal-periodic/ の要求を数えないため（G1、G3）。
-# Why not meta.total: 同じ理由で、件数が1つずれる。
-# jq の実体を、固定版の照合（resolve_tool）で得る。最初に使うときだけ照合し、以後は同じ値を使う。
+# jq の実体を、固定版の照合（resolve_tool）で得る。SWSC_JQ が設定されていれば照合せずに使う。
+# 無ければ呼び出しごとに照合する。コマンド置換の中で SWSC_JQ を設定しても、親のシェルには残らないため。
 # Why: 読み込みに副作用を持たせず、jq が要る関数の中で照合する。未導入や版違いは導入手順つきで失敗する。
 swsc_jq() {
   if [ -z "${SWSC_JQ:-}" ]; then
@@ -194,6 +192,9 @@ swsc_count_api_requests() {
   "$_jq" '[(.requests // [])[] | select(((.request.url // "") | tostring) | startswith("/api/"))] | length'
 }
 
+# WireMock が受けた /api/ の要求の件数を返す。
+# Why: Squid が起動後に送る /squid-internal-periodic/ の要求を数えないため（G1、G3）。
+# Why not meta.total: 同じ理由で、件数が1つずれる。
 swsc_wiremock_total() {
   _body=$(curl -fsS --max-time 5 http://127.0.0.1:8080/__admin/requests) || return 1
   printf '%s' "$_body" | swsc_count_api_requests
