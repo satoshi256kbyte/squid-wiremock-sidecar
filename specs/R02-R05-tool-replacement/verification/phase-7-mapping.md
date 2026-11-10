@@ -131,3 +131,25 @@
 - `unit` の時間は、旧の約44秒から約95秒に増えた。原因は未確認（bats の起動と検査ごとの隔離のコストと推定するが、計測していない）。
   `docs/ローカル実行とCI.md` の基準（上限の半分の90秒）を超えるため、次の CI の実測で確かめ、必要なら原因を調べる。
 - 品質ゲートは、この記録の時点（commit `61fa050`）で通過している。
+
+## 11. 利用者の端末での確認（macOS、bash 3.2）の手順
+
+この手順は、CI（Linux）では確認できない項目を、利用者の端末で確かめるための記録である。結果は、この表の「結果」の列に書き込む。
+
+| 順序 | 実行するコマンド（リポジトリのルートで） | 期待する結果 | 結果 |
+| --- | --- | --- | --- |
+| 1 | `/bin/bash --version` | GNU bash 3.2 系が出る | 通過（GNU bash 3.2.57、arm64） |
+| 2 | `mise install --locked` | 6つのツール（shellcheck、actionlint、gitleaks、bats、jq、yq）が入り、エラーが出ない | 通過（6 ツールのみ指定。警告のみ: global の `~/.tool-versions` の3件と、actionlint の非推奨） |
+| 3 | `sh tests/s14-taskdef-contract.sh unit` | 終了コード 0 | 通過（5/5） |
+| 4 | `sh tests/m03-wiremock-scenarios.sh unit` | 終了コード 0 | 通過（6/6） |
+| 5 | `sh tests/m06-client-resilience.sh unit` | 終了コード 0（133 件） | 通過（133/133） |
+| 6 | `sh tests/m07-scenario-isolation.sh unit` | 終了コード 0（42 件） | 通過（42/42） |
+| 7 | `sh tests/m08-e2e-suite.sh unit` | 終了コード 0（20 件） | 通過（20/20） |
+| 8 | `sh tests/m09-execution-and-ci.sh unit` | 終了コード 0（239 件） | 通過（239/239） |
+| 9 | `env AWS_ACCESS_KEY_ID=test AWS_SECRET_ACCESS_KEY=test sh tests/m09-execution-and-ci.sh contract`（先に `unset AWS_PROFILE AWS_SESSION_TOKEN AWS_SECURITY_TOKEN`。実際の認証情報の混在を避けるため） | 終了コード 0。ダミー値の認証情報が前提（実際の認証情報は使わない）。Docker と MiniStack を使うため、Docker が動いていることも前提 | 通過（6/6）。最初は認証情報の前提で止まった。ダミー値（AWS_ACCESS_KEY_ID=test、AWS_SECRET_ACCESS_KEY=test）と unset AWS_PROFILE で再実行 |
+
+- 手順 2 で `mise` が導入されていない場合は、`docs/ローカル実行とCI.md` の導入手順に従う。
+- 手順 9 は、利用者の端末だけで行う（品質ゲートには登録しない）。結果を、この表に書き込む。
+- 手順 1 から 8 で失敗した項目は、失敗したコマンドと出力の末尾を、この表の下に貼り付ける。
+- 確認は済み（手順1〜9、すべて通過。手順9は、ダミー値で再実行した）。
+- 作業記録の commit は、レビューの後に行う。
