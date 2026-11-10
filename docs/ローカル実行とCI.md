@@ -598,6 +598,7 @@ S14、M02、M03、M04、M05 の検査は、`tests/bats/*.bats` にある。入�
 | `tests/m04-test-client.sh` | `tests/bats/m04-test-client.bats` | Docker の `smoke` |
 | `tests/m05-proxy-integration.sh` | `tests/bats/m05-proxy-integration.bats` | Docker の `smoke` |
 | `tests/m08-e2e-suite.sh [unit\|smoke]` | `tests/bats/m08-e2e-suite.bats`。信号の2件は smoke で入口から呼ぶ | `unit`（Docker なし）、`smoke`（Docker） |
+| `tests/m09-execution-and-ci.sh [unit\|smoke\|contract]` | `tests/bats/m09-execution-and-ci.bats`（unit の 239 件）。smoke と contract の実装は入口に残す | `unit`（Docker と AWS CLI なし）、`smoke`（Docker）、`contract`（利用者の端末と CI だけ） |
 
 - 実行は `tests/lib/run-bats.sh` が行う。固定版の bats を `resolve_tool` で照合してから動かす。
   `bats` が無い、または版が違う場合は、導入手順つきで失敗する（`mise install --locked`）。

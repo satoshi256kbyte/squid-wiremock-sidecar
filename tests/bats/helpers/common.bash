@@ -21,7 +21,7 @@ common_setup_tmp() {
 }
 
 # 検査ごとの後始末。作業場所は bats が消すため、ここでは追加の処理を持たない。
-# Why: teardown_file は TERM では動かない（U15）。信号の後始末は、run-bats.sh の trap が bats を止めて行う。
+# Why: teardown_file は TERM では動かない（U15）。入口だけに TERM が届いたときの後始末は無い（既知のリスク。bats が孤児として残る）。
 common_teardown_tmp() {
   :
 }

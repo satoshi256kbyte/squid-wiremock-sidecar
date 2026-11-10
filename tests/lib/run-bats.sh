@@ -2,7 +2,7 @@
 # tests/bats/ の .bats を、固定版の bats で実行する入口。
 # 検査の中身は持たない。検査は .bats にある。この入口は、引数の検査と、bats の起動と、終了コードの受け渡しだけを行う。
 # 使い方: sh tests/lib/run-bats.sh <tests/bats/名前.bats> [unit|smoke|contract]
-# 終了コードは bats のものをそのまま返す。INT と TERM は bats に伝えてから止まる。
+# 終了コードは bats のものをそのまま返す。bats は前面で動く。入口が TERM を受けても bats へは渡さない（既知のリスク）。
 set -eu
 
 ROOT=$(cd "$(dirname "$0")/../.." && pwd)
@@ -35,20 +35,13 @@ fi
 resolve_tool bats 's/^Bats //p' --version || exit 1
 bats_bin=$RESOLVED_PATH
 
-# Why: bats を前面で待つと、この入口の trap は bats が終わるまで動かない。背景で起動して待つ。
-if [ -n "$mode" ]; then
-  "$bats_bin" --filter-tags "$mode" "$file" &
-else
-  "$bats_bin" "$file" &
-fi
-child=$!
-
-# Why: 信号を受けたら、bats に同じ信号を送って終わるまで待つ。bats の teardown_file は TERM では動かないため、
-# 子の後始末は、この trap と、各 .bats の中の後始末（helpers/common.bash）で行う。
-trap 'kill -TERM "$child" 2>/dev/null || true; wait "$child" 2>/dev/null || true; exit 143' TERM
-# Why: 背景の子は INT を無視して始まる（非対話シェル）。INT を受けたら TERM に読み替えて bats に送る。
-trap 'kill -TERM "$child" 2>/dev/null || true; wait "$child" 2>/dev/null || true; exit 130' INT
-
+# Why: bats は前面で動かす。背景で動かすと、子は SIGINT を無視して始まり、INT の検査（子が 130 で止まること）が通らないため。
+# 代わりに、この入口が TERM を受けても bats へは渡さない。入口だけに TERM が届くと、bats は孤児として残る。
+# これは利用者が受け入れた既知のリスクである。入口が TERM を受けたときの後始末は無い。
 rc=0
-wait "$child" || rc=$?
+if [ -n "$mode" ]; then
+  "$bats_bin" --filter-tags "$mode" "$file" || rc=$?
+else
+  "$bats_bin" "$file" || rc=$?
+fi
 exit "$rc"
