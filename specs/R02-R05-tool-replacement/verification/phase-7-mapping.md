@@ -1,0 +1,86 @@
+# R04 段階4（m09）の旧の検査の記録（T-R0316）
+
+作業日: 2026-11-09。対象: `tests/m09-execution-and-ci.sh`（旧の入口、4250行、関数 339 個）。
+
+## 1. 旧の入口の既定と実行結果
+
+- 引数なしの既定は `smoke`（`MODE=${1:-smoke}`、7行目）。`plan.md` 10.1節の既定の欄を確定した。
+- 実行結果は次のとおり。
+
+| モード | 終了コード | 所要時間 | 実行時の件数 | 結果 |
+| --- | --- | --- | --- | --- |
+| `unit` | 0 | 44秒 | 239件（`ok` の行も239件） | `unit: 239 件中 239 件通過` |
+| `smoke` | 0 | 119秒 | 11件 | `smoke: 11 件中 11 件通過` |
+| `contract` | 未実行 | — | 未確定（静的な項目数は6件） | 利用者の端末と CI だけで実行する（`AGENTS.md` の規則）。ゲートには登録しない |
+
+- smoke の後、`swsc-` 接頭辞のコンテナは残っていない。
+
+## 2. U17（件数のずれ）の扱い
+
+| 数え方 | 値 | 判断 |
+| --- | --- | --- |
+| 入口のファイルの行数 | 4250 | 件数ではない |
+| 仮の数字 227（静的） | — | 今回の数え方では再現できなかった。確定しない |
+| 仮の数字 234（`clarify.md`） | — | 出所を確定できなかった。確定しない |
+| `unit` の実行時の件数 | 239 | 実測で確定 |
+| `smoke` の実行時の件数 | 11 | 実測で確定。静的な `smoke_item` の行数も11件 |
+| `contract` の件数 | 未確定 | 利用者の端末とCIで実測する。静的な `contract_item` の行数は6件 |
+
+- U17 は、`unit` と `smoke` が確定した時点で一部解消する。234 と 227 の出所は未解決のまま残す。
+- 静的な行数と実行時の件数が違うのは、`smoke_item` と `contract_item` の包みの行から、項目が複数回呼ばれるためである（`plan.md` 6.3節）。
+
+## 3. 信号の検査の一覧（`grep -nE 'kill -(INT|TERM)|signal\.SIG|SIGINT'`、19行）
+
+| 行 | 種類 |
+| --- | --- |
+| 22、23、27、29 | 冒頭の SIGINT 無視の検査（前面で起動したかの確認） |
+| 156 | `kill -TERM "$PPID_PARENT"` |
+| 705、706 | 偽の aws の `kill -INT "$PPID"`、`kill -TERM "$PPID"` |
+| 1766 | `lib_call` 経由の偽の関数の中の `kill`（`sig-sent` の判定） |
+| 1794、1806、1850 | `lib_call` 経由の `kill -INT $$`、`kill -TERM $$` |
+| 2131、2136、2137 | Python の `signal`（`SIG_DFL` へ戻す） |
+| 3831、3882、3895、3908、3958 | `lib_call` 経由の `kill`（smoke とは別の段の検査） |
+
+## 4. 関数の群（接頭辞ごとの分割表、T-R0317、T-R0318〜T-R0321の入力）
+
+| 群 | 接頭辞 | 関数数 | 移す先の段 |
+| --- | --- | --- | --- |
+| 群1（静的） | `t_wf_` 19、`t_gate_` 16、`t_mise_` 1、`t_gitleaks_` 4、`t_json_` 1、`t_bats_` 1、`t_run_bats_` 1 | 43 | T-R0318 |
+| 群2（文書とCI） | `t_ci_` 1、`t_doc_` 14 | 15 | T-R0319 |
+| 群3（unit の実行系、信号を除く） | `t_entry_` 17、`t_test_` 16、`t_runner_` 10、`t_derive_` 10、`t_docker_` 8、`t_collect_` 8、`t_start_` 7、`t_managed_` 6、`t_swsc_` 4、`t_render_` 9、`t_compare_` 9、`t_clean_` 4、`t_wiremock_` 3、`t_template_` 3、`t_production_` 3、`t_fr9*` 3、`t_entrypoint_` 3、`t_client_` 3、`t_squid_` 2、`t_stop_` 2、`t_prepare_` 2、`t_check_` 5、`swsc_stop` 10、`swsc_collect` 6、残りの接頭辞のない関数 | 残り（個別の数は T-R0320 で数える） | T-R0320 |
+| 群4（smoke と contract） | `t_smoke_` 2、`t_contract_` 25 | 27 | T-R0321 |
+| 信号の検査 | 3章の19行に対応する関数 | 別表 | T-R0322 |
+
+- 合計の関数数は339個。群の数の合計と一致するかは、T-R0317 で数え直して確かめる。
+
+## 5. 自己参照の検査（`plan.md` 11.4節）
+
+`tests/m09-execution-and-ci.sh` の本文を、`grep` や `sed` で読む検査の箇所は次のとおり。
+
+| 行 | 読む対象 | 扱い |
+| --- | --- | --- |
+| 2007 | 自分の `smoke_item` の並び（`grep -E '^  smoke_item [0-9]+ '`） | 薄い入口に移すと0件になる。読む先を `.bats` へ変える（T-R0349） |
+| 2013 | 自分の `contract_item` の並び | 同上 |
+| 2019〜2021 | 自分の `unit` の呼び出し位置 | 同上 |
+| 3131 | 自分の `json.load(` の数 | 同上 |
+
+- 他の箇所は、ワークフロー、`AGENTS.md`、ゲートの本文を読む。自分の本文は読まない。
+
+## 6. 次の段階への引き継ぎ
+
+- 群1（43件）から移す（T-R0318）。
+- 信号の検査は、本体を字句のまま移し、呼び出しだけを `@test` にする（T-R0322）。
+- `contract` の件数は、利用者の端末かCIで確定させる。確定までは「未確認」と書く。
+
+## 7. 群1の移行の結果（T-R0318）
+
+- 群1（静的な検査、43件）を `tests/bats/m09-execution-and-ci.bats` へ移した。`@test` の名前は旧の `check` の名前と同じで、順序も同じ。
+- 件数: `grep -c '^@test'` は 43。`sh tests/lib/run-bats.sh tests/bats/m09-execution-and-ci.bats unit` は 43 件すべて通過。
+- 入口 `tests/m09-execution-and-ci.sh unit` の件数は、旧と同じ 239 件（入口の残り 196 件と、bats の 43 件）。終了コードは 0。
+- 入口の変更（最小限）:
+  - 群1の関数と `check` の行を外した。`must`、`rc_is`、`gate_has` など、群1と他の群が共有する補助は入口に残した。
+  - `M09_LIB_ONLY=1` と `M09_LIB_ROOT` で読み込んだとき、SIGINT の確認と検査の実行を飛ばす。bats の setup が入口を読むため。
+  - `run_unit` の最後で、bats の群1を `run-bats.sh` で走らせ、件数を `total` に足す。
+- 逸脱: 群1の検査は、入口の `check` の仕組み（サブシェルと作業場所の掃除）ではなく、bats の隔離で実行する。判定は、検査の関数の終了コードで同じく決まる。
+- 検証: shellcheck（`-s sh -S style` と `-s bash -S style`）は 0 件。品質ゲートは通過（unit 239 件、smoke 11 件）。
+- 残り: 群2（文書とCI、15件）、群3（unit の実行系、信号を除く）、群4（smoke と contract）、信号の検査（T-R0322）は未着手。
