@@ -154,13 +154,15 @@ Squid が内部で出す要求（`/squid-internal-periodic/` など）は数え�
 | --- | --- | --- | --- |
 | 1 | mise の導入（`jdx/mise-action`） | mise を固定版で導入し、`--locked shellcheck` で shellcheck を導入する。名前を付けない `uses` である | 上限なし（job 全体の15分に従う） |
 | 2 | `shellcheck` | `git ls-files` の `*.sh` を、導入した shellcheck で検査する | 3分 |
-| 3 | `unit` | `sh tests/m09-execution-and-ci.sh unit` | 3分 |
-| 4 | `test-ci` | `npm run test:ci` の後に、M08 の4シナリオを `sh scripts/e2e.sh test:ci normal error-500-then-200 ratelimit-429 slow-5000` で実行する | 10分 |
-| 5 | `smoke` | `sh tests/m09-execution-and-ci.sh smoke` | 8分 |
-| 6 | `contract` | `sh tests/m09-execution-and-ci.sh contract` | 5分 |
-| 7 | `collect` | `sh scripts/e2e.sh collect`。失敗しても必ず実行する | - |
-| 8 | アップロード | `e2e-logs/` を保存する。失敗時だけ実行する | - |
-| 9 | `stop` | `npm run stop`。必ず実行する | - |
+| 3 | `actionlint` | `.github/workflows/e2e-test.yml` を、固定版の actionlint で検査する（品質ゲートは `.github/workflows/` の全ワークフローを検査する） | 2分 |
+| 4 | `gitleaks` | 作業ツリーを、固定版の gitleaks で検査する（`--redact`） | 2分 |
+| 5 | `unit` | `sh tests/m09-execution-and-ci.sh unit` | 3分 |
+| 6 | `test-ci` | `npm run test:ci` の後に、M08 の4シナリオを `sh scripts/e2e.sh test:ci normal error-500-then-200 ratelimit-429 slow-5000` で実行する | 10分 |
+| 7 | `smoke` | `sh tests/m09-execution-and-ci.sh smoke` | 8分 |
+| 8 | `contract` | `sh tests/m09-execution-and-ci.sh contract` | 5分 |
+| 9 | `collect` | `sh scripts/e2e.sh collect`。失敗しても必ず実行する | - |
+| 10 | アップロード | `e2e-logs/` を保存する。失敗時だけ実行する | - |
+| 11 | `stop` | `npm run stop`。必ず実行する | - |
 
 失敗したときは、実行結果のページの Artifacts から `e2e-logs-<実行ID>-<試行回数>` をダウンロードする。
 保存期間は7日である。
@@ -197,6 +199,19 @@ R01 の初回の CI（PR #38、`ubuntu-24.04`、2026-11-08）の実測は次の�
 | `smoke` | 約77秒 | 8分 |
 | `contract` | 約33秒 | 5分 |
 | ジョブ全体 | 3分26秒 | 15分 |
+
+CI の最新の実測（commit `a6908af`、run `42826812030`、2026-11-10）は次のとおりである。時間は、GitHub の step の開始と終了の差から求めた。
+
+| ステップ | 実測 | 上限 |
+| --- | --- | --- |
+| `shellcheck` | 約2秒 | 3分 |
+| `actionlint` | 1秒未満 | 2分 |
+| `gitleaks` | 約1秒 | 2分 |
+| `unit` | 約58秒 | 3分 |
+| `test-ci` | 約64秒 | 10分 |
+| `smoke` | 約111秒 | 8分 |
+| `contract` | 約69秒 | 5分 |
+| ジョブ全体 | 5分13秒 | 15分 |
 
 どの上限も実測の半分を下回っているため、上限は変えていない。`unit` は、S26 の初回（22秒、29秒）より長い。差の原因は未確認である。上限の3分には余裕があるが、次の CI の実測が上限の半分（90秒）を超えたら、原因を調べる。
 上限は、待ち上限で止まる失敗を、ジョブの上限より先にステップの上限で見つけるための値である。
@@ -325,8 +340,8 @@ mise install --locked
 
 | 検査 | 実測 |
 | --- | --- |
-| `mise install --locked`（6ツール） | 未反映 |
-| 品質ゲート（6ツールの導入後） | 未反映 |
+| `mise install --locked`（6ツール） | 確認済み（利用者の端末、`specs/R02-R05-tool-replacement/verification/phase-7-mapping.md` の 11 章） |
+| 品質ゲート（6ツールの導入後） | 未確認（利用者の端末では未実行） |
 
 ## shellcheck の導入と品質ゲート
 
@@ -339,7 +354,8 @@ shellcheck の版は、mise で固定する。版を変えるときは、この�
 - Node.js 22 以上と Docker は、従来どおり必要である。
 - mise の導入は、公式の配布元から取得した実体と `SHASUMS256.txt` を `sha256sum -c` で照合してから、PATH の通る場所へ置く。
   パイプでシェルへつなぐ導入はしない。
-- macOS では Homebrew の `brew install mise` を候補にする。この経路は未確認である（後の「未確認の項目」を参照）。
+- macOS は、利用者の端末（mise 2026.11.4）で `mise install --locked` の6ツールの導入を確認した。
+  記録は `specs/R02-R05-tool-replacement/verification/phase-7-mapping.md` の 11 章にある。導入の経路（Homebrew など）は確かめていない。
 
 ### 導入と版の固定
 
@@ -496,7 +512,7 @@ CI の上限（`shellcheck` step の3分）は、CI の実測の約9秒に対し
 | 項目 | 状態 |
 | --- | --- |
 | 版違いの失敗（期待と違う版を入れた状態で、ゲートが `FAILED:` で止まる） | 未確認。利用者の端末で確かめる |
-| macOS での mise の導入（Homebrew）と `mise install --locked` | 未確認。利用者の端末で確かめ、結果をこの節に書く |
+| macOS での mise の導入と `mise install --locked` | 確認済み（`specs/R02-R05-tool-replacement/verification/phase-7-mapping.md` の 11 章）。導入の経路（Homebrew など）は未確認 |
 | `mise-action` の `install_args` が `--locked` を重複させないこと | 初回 CI の前にソースで確かめた。結果は検証の記録にある |
 
 ## actionlint と構造比較（フェーズ1）

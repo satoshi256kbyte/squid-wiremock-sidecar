@@ -185,7 +185,7 @@ GitHub Actions workflow（`.github/workflows/e2e-test.yml`）により、
 PR/push 時に自動的に E2E テストを実行する。実行の順序と見方は
 [ローカル実行とCI](docs/ローカル実行とCI.md) を参照する。
 
-実行時間の目標: < 3 分（CI の初回実行で実測し、文書に反映する）
+実行時間: CI の e2e ジョブの実測は約5分13秒で、上限15分の内に収まる（commit `a6908af`、目標の3分は未達）。内訳と上限は [ローカル実行とCI](docs/ローカル実行とCI.md) を参照する。
 
 ## Troubleshooting
 

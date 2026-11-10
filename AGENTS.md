@@ -43,6 +43,9 @@ actionlint、gitleaks、bats、jq、yq の各ゲートは、そのツールを�
 | ECS タスク定義方式のE2E基盤（`scripts/e2e*.sh`、`ecs/`、`tests/m09-execution-and-ci.sh`） | 上記、`shellcheck`、`python3 -B -m py_compile scripts/e2e-taskdef.py`、`sh tests/m09-execution-and-ci.sh unit`と`smoke`。`contract`は利用者の端末とCIだけで実行し、品質ゲートに登録しない |
 | すべての変更（毎回実行） | `actionlint`（`.github/workflows/`の全ワークフローを検査する。mise が必要。未導入と版違いは `FAILED:` と導入手順を出して失敗する） |
 | すべての変更（毎回実行） | `gitleaks`（作業ツリーを `dir` で走査し、`--redact` で検出した値を出さない。mise が必要。未導入と版違いは `FAILED:` と導入手順を出して失敗する） |
+| すべての変更（毎回実行） | `jq`（JSON の値を扱う検査より前に、固定版を照合する。mise が必要。未導入と版違いは `FAILED:` と導入手順を出して失敗する） |
+| すべての変更（毎回実行） | `bats`（`tests/bats/` と `tests/lib/run-bats.sh` の検査より前に、固定版を照合する。mise が必要。未導入と版違いは `FAILED:` と導入手順を出して失敗する） |
+| すべての変更（毎回実行） | `yq`（Markdown のゲートより前に、固定版を照合する。M09 の契約の検査で使う。mise が必要。未導入と版違いは `FAILED:` と導入手順を出して失敗する） |
 
 旧の grep による識別情報の検査は削除済みで、識別情報の検査は gitleaks（`.gitleaks.toml` の規則）が担う。
 
@@ -305,6 +308,9 @@ Spec Kit前半、implement、レビューを独立した工程として起動す
 
 - 入口は `sh tests/<名前>.sh [モード]` のまま変えない。入口は、起動と停止、引数の検査、`tests/lib/run-bats.sh` の呼び出しだけを持つ。
 - `tests/lib/run-bats.sh` は検査の中身を持たない。bats の実体と版を固定版（`resolve_tool`）で照合し、bats を起動し、終了コードを返す。
-  INT と TERM は bats に伝えてから止まる。bats の `teardown_file` は TERM では動かないため、後始末は入口の trap で行う。
+  bats は前面で動かす（背景の子は SIGINT を無視するため）。入口は TERM を bats へ渡さない。
+  入口だけに TERM が届くと、bats は孤児として残る（利用者が受け入れた既知のリスク）。
+  bats の `teardown_file` は TERM では動かないため、後始末は各 .bats の後始末（`tests/bats/helpers/common.bash`）で行う。
+  ただし、入口だけに TERM が届いた場合の後始末は無い（上記の既知のリスク）。残った資源は、管理対象の残存検査で確かめる。
 - 前面のシェルで実行する前提である。背景や nohup で起動すると、SIGINT の検査が失敗する（`common_require_foreground` が確かめる）。
 - 品質ゲートの表の M02〜M05、S14 の行は、入口が変わらないため、そのまま使う。
