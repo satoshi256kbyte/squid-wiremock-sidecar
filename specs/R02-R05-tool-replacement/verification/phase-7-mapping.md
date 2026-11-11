@@ -153,3 +153,13 @@
 - 手順 1 から 8 で失敗した項目は、失敗したコマンドと出力の末尾を、この表の下に貼り付ける。
 - 確認は済み（手順1〜9、すべて通過。手順9は、ダミー値で再実行した）。
 - 作業記録の commit は、レビューの後に行う。
+
+## 12. 移行の検査（T-R0345〜T-R0349）の結果
+
+| タスク | 内容 | 結果 |
+| --- | --- | --- |
+| T-R0345 | m08 の移行の検査 `t_bats_stage3_m08_is_migrated` | 追加した。実際のファイルで通過。偽の用意（`make_fake`）の定義を足した写しで落ちることを確かめた（赤の確認）。入口には、smoke が使う `check` が残るため、検査は `check` を禁じない（段階3で承認した逸脱） |
+| T-R0346 | m09 の移行の検査 `t_bats_stage4_m09_is_migrated` | 未完了。入口には、bats の補助として使う `check`、`must`、`rc_is` の定義が残っている。これを外すのは、T-R0323 の設計の作業である。検査を先に足すと赤のまま残るため、今は追加しない |
+| T-R0347 | gitleaks の規則の検査 `t_gitleaks_rules_detect_runtime_built_values` | 既にある（群1の移行で bats に入った） |
+| T-R0348 | actionlint の式の誤りの検査 `t_actionlint_rejects_expression_error` | 既にある（bats に入っている） |
+| T-R0349 | 自己参照の検査の書き換え | 不要。読む先の入口には、smoke と contract の項目（`smoke_item`、`contract_item`）が残るため、検査はそのまま通る |

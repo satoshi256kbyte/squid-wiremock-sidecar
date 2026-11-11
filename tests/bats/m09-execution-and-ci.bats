@@ -3897,3 +3897,22 @@ t_contract_interrupt_exits_130_and_removes() {
 @test 'INTは終了コード130で、後始末をしてから止まる' {
   t_contract_interrupt_exits_130_and_removes
 }
+
+# ---- 移行の検査（T-R0345）: m08 は bats へ移り、入口は run-bats.sh を呼ぶ ----
+
+t_bats_stage3_m08_is_migrated() {
+  _b="$ROOT/tests/bats/m08-e2e-suite.bats"
+  _e="$ROOT/tests/m08-e2e-suite.sh"
+  [ -f "$_b" ] || return 1
+  [ -f "$_e" ] || return 1
+  # 偽の用意（make_fake など）の定義は入口に残っていないこと（bats の helpers に1か所だけ）。
+  # check は、入口に残る smoke が使うため残す（段階3で承認した逸脱）。
+  ! grep -Eq '^(make_fake|make_shims|make_base_bin|no_calls)\(\)' "$_e" || return 1
+  # 入口は bats の実行入口（run-bats.sh）を呼ぶこと。
+  grep -Fq 'tests/lib/run-bats.sh' "$_e"
+}
+
+# bats test_tags=unit
+@test "m08 は bats へ移り、入口は run-bats.sh を呼び、旧の make_fake などの定義が残らない" {
+  t_bats_stage3_m08_is_migrated
+}
