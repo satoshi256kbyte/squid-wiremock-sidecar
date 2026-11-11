@@ -1,7 +1,7 @@
 # shellcheck shell=sh
-# shellcheck disable=SC2034 # RESOLVED_PATH と RESOLVED_VERSION は、読み込んだ側（quality-gate.sh）が使う。
+# shellcheck disable=SC2034 # RESOLVED_PATH と RESOLVED_VERSION は、読み込んだ側が使う。
 # miseの固定版のツールを照合する関数を定義する。読み込んでも、コマンドは実行しない（副作用なし）。
-# scripts/quality-gate.sh が . で読み込む。
+# scripts/e2e-lib.sh が . で読み込む。
 
 # resolve_tool <ツール名> <版を取り出す sed の式> <版を出す引数>
 # 成功時は RESOLVED_PATH（実体のパス）と RESOLVED_VERSION（実際の版）を設定して 0 を返す。

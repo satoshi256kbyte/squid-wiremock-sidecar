@@ -502,8 +502,8 @@ swsc_test_ci_main() {
   exit "$_rc"
 }
 
-# test:ci の名前指定。M08 の代表4シナリオから選んだものだけを、test:ci のロックの下で実行する。
-# Why: 起動、実行、収集、停止は tests/m08-e2e-suite.sh が持つ。ここは名前の検査、ロック、子への引き渡しだけを行う。
+# test:ci の名前指定。代表4シナリオから選んだものだけを、test:ci のロックの下で実行する。
+# Why: 起動、実行、収集、停止は scripts/e2e-scenarios.sh が持つ。ここは名前の検査、ロック、子への引き渡しだけを行う。
 # Why: 子には SWSC_LOCK_HELD=1 を渡し、ロックを二重に取らない（test:ci の規約）。
 swsc_test_ci_scenarios() { # シナリオ名...
   for _n in "$@"; do
@@ -537,10 +537,10 @@ swsc_test_ci_scenarios() { # シナリオ名...
   exit "$_rc"
 }
 
-# test:ci の名前指定の子。M08 の smoke を、親のロックの下（SWSC_LOCK_HELD=1）で動かす。
+# test:ci の名前指定の子。代表4シナリオを、親のロックの下（SWSC_LOCK_HELD=1）で動かす。
 # Why: 関数に分けるのは、unit で子を差し替えて、信号とロックの扱いだけを確かめるため。
 swsc_test_ci_scenarios_child() { # シナリオ名...
-  SWSC_LOCK_HELD=1 exec sh "$SWSC_ROOT/tests/m08-e2e-suite.sh" smoke "$@"
+  SWSC_LOCK_HELD=1 exec sh "$SWSC_ROOT/scripts/e2e-scenarios.sh" "$@"
 }
 
 # 子が動いていれば TERM を送り、終わるまで待つ。動いていなければ何もしない。冪等。

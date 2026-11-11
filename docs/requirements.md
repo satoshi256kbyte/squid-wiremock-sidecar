@@ -76,7 +76,7 @@ HTTP クライアントの堅牢性を担保するためには、
 | wiremock-scenarios/ | `./wiremock-scenarios/` | WireMock 用のモック定義（JSON スタブ） |
 | test-client/ | `./test-client/` | テスト対象クライアントアプリケーション |
 | docs/setup-guide.md | `./docs/` | ローカル・CI 環境でのセットアップ手順 |
-| E2E テストスイート | `./tests/` | 正常系・異常系のテストケース定義 |
+| E2E シナリオの実行 | `./scripts/e2e-scenarios.sh` | 正常系・異常系の4シナリオの実行 |
 
 ## 8. 制約事項
 

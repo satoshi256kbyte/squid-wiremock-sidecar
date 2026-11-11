@@ -1,4 +1,4 @@
-# M09 pause方式のランナー。scripts/e2e.sh と tests/m09 から読み込む（直接実行しない）。
+# M09 pause方式のランナー。scripts/e2e.sh から読み込む（直接実行しない）。
 # 前提: 先に e2e-lib.sh を読み込み、SWSC_ROOT を設定しておく。
 # Why: 起動の順序（WireMock、管理APIの応答、pause、Squid）を1か所に集め、偽の docker と curl で固定するため（G1）。
 

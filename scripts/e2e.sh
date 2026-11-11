@@ -16,7 +16,7 @@ SWSC_ROOT=$ROOT
 usage() {
   cat >&2 <<'EOF'
 使い方: sh scripts/e2e.sh <操作> [引数]
-操作: start | test | logs | stop | clean | test:ci [シナリオ名...] | collect | check-production <ファイル> | contract
+操作: start | test | logs | stop | clean | test:ci [シナリオ名...] | collect | check-production <ファイル>
 EOF
 }
 
@@ -73,13 +73,6 @@ case $op in
     fi
     swsc_need_cmd python3 || exit 1
     exec python3 -B "$ROOT/scripts/e2e-taskdef.py" check-production "$1"
-    ;;
-  contract)
-    # 前提（認証情報を含む）は、MiniStack の起動と aws の呼び出しより前に検査する。
-    swsc_check_contract_prereq || exit 1
-    # shellcheck source=/dev/null
-    . "$ROOT/scripts/e2e-contract.sh"
-    contract_main
     ;;
   *)
     usage
