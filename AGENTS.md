@@ -27,7 +27,7 @@ npm run test:ci && sh scripts/e2e.sh test:ci normal error-500-then-200 ratelimit
 
 - 新しい検査や補助のスクリプトは、一般的なツール（shellcheck、actionlint、gitleaks）で代えられないときだけ作る。
 - 検査のための検査（スクリプトの中身を読む検査）は作らない。
-- 仕様書や計画書は、このリポジトリに置かない。
+- 仕様は `specs/MVP/spec.md` の1ファイルだけにする。分割しない。
 
 ## 一時ファイルの後始末
 
