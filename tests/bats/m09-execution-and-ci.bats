@@ -33,8 +33,9 @@ setup() {
   export SWSC_JQ
   UNIT_LOCK_BASE=$(lock_case_dir) || return 1
   UNIT_LOCK=$UNIT_LOCK_BASE/ports.lock
-  # 入口は set -eu で読み込まれる。bats の変数を守るため、-u を戻す。
-  set +eu
+  # 入口は set -eu で読み込まれる。bats の変数を守るため -u だけを戻し、-e は残す。
+  # Why: -e を切ると、検査の関数が return 1 で失敗しても、検査が成功扱いになるため。
+  set +u
 }
 
 teardown() {
@@ -332,8 +333,10 @@ t_json_extraction_uses_jq() {
   # m09 は、JSON を書き換えて写しを作る関数と、Docker の出力を複数の条件で確かめる関数を除き、JSON の読み込みを残さない。
   # Why: これらは取り出しではなく、壊した入力や変更後の写しを作る経路（mutate と同じ役割）である。
   #      contract_c4 は複数の条件と個別の失敗文言を持つため、値の取り出しの置き換えの対象外とする。
-  _outside=$(awk '/^(mutate|desc_mutate|runner_mutate|contract_base|contract_c4|contract_c6)\(\) \{/ { inm = 1 } inm && /^}/ { inm = 0; next } !inm' \
-    "$ROOT/tests/m09-execution-and-ci.sh" | grep -c 'json\.load(' || true)
+  # 入口と補助（移した関数の置き場）の両方を読む。Why: 補助へ移すと、入口だけの検査は何も見なくなるため。
+  _outside=$(cat "$ROOT/tests/m09-execution-and-ci.sh" "$ROOT/tests/bats/helpers/m09-lib.bash" \
+    | awk '/^(mutate|desc_mutate|runner_mutate|contract_base|contract_c4|contract_c6)\(\) \{/ { inm = 1 } inm && /^}/ { inm = 0; next } !inm' \
+    | grep -c 'json\.load(' || true)
   [ "$_outside" -eq 0 ] || return 1
   # scripts の e2e-contract.sh は JSON を読まない。e2e-lib.sh は、詳細な判定の swsc_wiremock_count_path だけが読む。
   [ "$(grep -c 'json\.load(' "$ROOT/scripts/e2e-contract.sh" || true)" -eq 0 ] || return 1
@@ -354,7 +357,8 @@ t_gitleaks_config_has_no_global_allowlist() {
   # 追跡対象と作業ツリーのスクリプト・テスト・ワークフロー・設定に、除外の印が無いこと。
   # 印の文字列は組み立てて持つ。この検査のファイル自身に一致させないため。文書は対象外。
   _tok=$(printf '%s:%s' 'gitleaks' 'allow')
-  _hits=$(cd "$ROOT" && git grep -l -F "$_tok" -- scripts tests .github .gitleaks.toml) ; _rc=$?
+  _rc=0
+  _hits=$(cd "$ROOT" && git grep -l -F "$_tok" -- scripts tests .github .gitleaks.toml) || _rc=$?
   [ "$_rc" -eq 1 ] || return 1
   return 0
 }
@@ -3333,11 +3337,11 @@ jobs:
     steps:
       - run: echo ${{ does.not.exist }}
 EOF
-  "$_al" "$_bad_wf" >/dev/null 2>&1
-  _bad_rc=$?
+  _bad_rc=0
+  "$_al" "$_bad_wf" >/dev/null 2>&1 || _bad_rc=$?
   # shellcheck disable=SC2031 # ここの WF は親のシェルの値（リポジトリのワークフロー）。部分シェルの変更は及ばない。
-  "$_al" "$WF" >/dev/null 2>&1
-  _ok_rc=$?
+  _ok_rc=0
+  "$_al" "$WF" >/dev/null 2>&1 || _ok_rc=$?
   # 一時のワークフローを1つずつ消してから、空の場所を消す。
   rm -f "$_bad_wf" || return 1
   rmdir "$_d" || return 1

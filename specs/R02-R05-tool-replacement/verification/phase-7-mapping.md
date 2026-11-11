@@ -163,3 +163,177 @@
 | T-R0347 | gitleaks の規則の検査 `t_gitleaks_rules_detect_runtime_built_values` | 既にある（群1の移行で bats に入った） |
 | T-R0348 | actionlint の式の誤りの検査 `t_actionlint_rejects_expression_error` | 既にある（bats に入っている） |
 | T-R0349 | 自己参照の検査の書き換え | 不要。読む先の入口には、smoke と contract の項目（`smoke_item`、`contract_item`）が残るため、検査はそのまま通る |
+
+## 13. T-R0346 の前提（入口の補助関数の移動）の計画
+
+### 13.1 現状（`tests/m09-execution-and-ci.sh`、1399行）
+
+| 補助 | 入口での定義 | 入口での使用 | bats での使用 | 扱い |
+| --- | --- | --- | --- | --- |
+| `must` | あり | 3 | 482 | 移す |
+| `rc_is` | あり | 1 | 12 | 移す |
+| `check` | あり | 5 | 14 | 移す（smoke と contract の入口が使う） |
+| `lib_call` | あり | 2 | 49 | 移す |
+| `run_e2e` | あり | 1 | 7 | 移す |
+| `gate_has`、`gate_sources`、`gate_m09_block` | あり | 1 | 4 〜 12 | 移す |
+| `wf_yq_bin`、`wf_broken_case` | あり | 1 | 10 〜 19 | 移す |
+| `make_base_bin`、`make_fake`、`make_shims`、`no_calls` | なし（`tests/bats/helpers/fakes.bash` にある） | 6 | 4 〜 15 | 変更なし |
+
+- 入口に残る smoke と contract の関数は 17 個ある。これらは移さない（段階4で承認した逸脱）。
+
+### 13.2 方針
+
+1. 補助関数と、それが使う変数（`total`、`failures`、`TMP`、`WF`、`SMOKE_ID_RE` など）を、`tests/bats/helpers/m09-lib.bash` へ移す。定義は字句のまま移す。
+2. 入口は、この補助ファイルを `.` で読み込む（`fakes.bash` と同じ作り）。入口の定義は残らない。
+3. bats は、補助ファイルを `load` で読む。入口を読み込む必要は、補助の関数については無くなる。
+4. 入口に残るのは、smoke と contract の関数、モードの分岐、`run-bats.sh` の呼び出し。
+5. T-R0346 の検査（`t_bats_stage4_m09_is_migrated`）を、移動の後に足す。入口に `check`、`must`、`rc_is`、`expect`、`make_fake` の定義が無いことを確かめる。
+
+### 13.3 手順と確認
+
+| 順序 | 作業 | 確認 |
+| --- | --- | --- |
+| 1 | 補助と変数の一覧を作る（定義の行範囲と、使う変数） | 一覧の件数が 13.1 と合う |
+| 2 | 補助ファイルを作り、定義を字句のまま移す。入口は読み込みに置き換える | `sh -n` と shellcheck が通る |
+| 3 | bats の setup から、入口の読み込みを補助ファイルの読み込みに変える。残る入口の変数は、移した後に確かめる | bats の 240 件が通る |
+| 4 | 入口の unit を実行する | 件数が 240、終了コードが 0 |
+| 5 | T-R0346 の検査を足す。赤の確認は、入口に `must` の定義を足した写しで行う | 実際のファイルで通り、写しで落ちる |
+| 6 | 記録の件数を更新する。unit は 239 件（T-R0316 の記録）から 240 件（m08 の検査を足した後）になった理由を書く | 記録と実測が一致する |
+
+### 13.4 注意
+
+- 入口の `set -eu` と、読み込み時の副作用（`TMP=`、`total=0`）は、補助ファイルへ移すと挙動が変わる。読み込みの順序を、bats の setup と入口で揃える。
+- `check` は、入口に残る smoke と contract が使うため、入口からも読み込む。同じ定義を2か所に持たない。
+- 変更は大きい（補助の定義の移動と、読み込みの変更）。段階ごとに commit し、各段階で品質ゲートを通す。
+- レビューは、移動の commit ごとに evidence と security を行う。
+
+### 13.5 段階1の結果（補助と変数の一覧）
+
+入口 `tests/m09-execution-and-ci.sh`（1399行）の、補助関数の定義の行範囲。
+
+| 補助 | 行 | 補助 | 行 |
+| --- | --- | --- | --- |
+| `must` | 51〜56 | `contract_go` | 258〜262 |
+| `rc_is` | 59〜65 | `contract_item` | 564〜566 |
+| `check` | 68〜84 | `contract_setup` | 239〜243 |
+| `run_e2e` | 91〜95 | `contract_run` | 247〜255 |
+| `render_local` | 115〜120 | `entry_fakes` | 419〜479 |
+| `mutate` | 123〜130 | `entry_run` | 488〜493 |
+| `render_production` | 136〜140 | `entry_sandbox` | 159〜171 |
+| `check_production` | 142〜144 | `entry_setup` | 482〜485 |
+| `derive` | 151〜155 | `runner_docker_args` | 405〜408 |
+| `contract_fakes` | 180〜215 | `runner_mutate` | 398〜403 |
+| `contract_base` | 219〜236 | `runner_run` | 384〜390 |
+| `desc_mutate` | 282〜290 | `runner_setup` | 372〜380 |
+| `compare_cli` | 292〜294 | `seq_before` | 270〜274 |
+| `compare_mismatch` | 298〜307 | `seq_last_is` | 277〜279 |
+| `has_text` | 265〜267 | `seq_line` | 393〜395 |
+| `fr920_hits` | 106〜108 | `smoke_item` | 560〜562 |
+| `lib_call` | 496〜502 | `managed_setup` | 1306〜1324 |
+| `swsc_collect` | 509 | `managed_run` | 1327〜1331 |
+| `swsc_stop` | 510〜515 | `lock_case_dir` | 1233〜1239 |
+| `swsc_test_run` | 508 | `lock_case_clear` | 1242〜1245 |
+| `wf_yq_bin` | 1113〜1117 | `lock_busy_setup` | 1336〜1339 |
+| `wf_broken_case` | 1125〜1135 | `t2602_fake_docker` | 1265〜1287 |
+| `gate_has` | 1152〜1154 | `t2602_fake_curl` | 1289〜1301 |
+| `gate_m09_block` | 1157〜1162 | `contract_c4` | 1055〜1075 |
+| `gate_sources` | 1165 | `contract_c6` | 1085〜1101 |
+
+- 入口の先頭の変数: `MODE`（7行）、`TMP`（46行）、`total`（47行）、`failures`（48行）、`CONTRACT_FREE`（311行）、`COLLECT_DEF`（314行）、`CI_FAKES`（507行）、`SMOKE_HOLDER`（556行）、`SMOKE_ID_RE`（558行）、`WF`（1109行）。
+- 補助の定義は、入口の先頭から末尾まで散らばっている（51〜1399行）。smoke と contract の関数（17個）と並んでいるため、一括の移動は、補助の定義の行範囲を一つずつ切り出す必要がある。
+- 段階2（移動）は、補助ごとに、移動と読み込みの確認を繰り返す。1回の commit に収めない。
+
+### 13.6 段階2の第1区切り（完了）
+
+- 移したもの: `TMP`、`total`、`failures`、`must`、`rc_is`、`check`（入口の44〜84行目）。字句のまま、`tests/bats/helpers/m09-lib.bash` へ移した。
+- 入口は、この補助ファイルを `. "$ROOT/tests/bats/helpers/m09-lib.bash"` で読み込む（`fakes.bash` と同じ作り）。
+- 確認: 入口の unit は 240 件すべて通過（bats の 240 件を含む）。shellcheck（`sh` と `bash` の方言）は通過。
+- 残り: `lib_call`、`run_e2e`、`gate_has` などの補助。`check` を含めた残りの補助は、次の区切りで移す。T-R0346 の検査は、移動が終わってから足す。
+
+### 13.7 段階2の第2区切り（完了）
+
+- 移したもの: `run_e2e`、`lib_call`（それぞれの直前の説明コメントを含む）。`tests/bats/helpers/m09-lib.bash` へ字句のまま移した。
+- 確認: 入口の unit は 240 件すべて通過。shellcheck（`sh` の方言）は通過。入口に残る定義は 0。
+- 残り: `gate_has`、`gate_sources`、`gate_m09_block`、`wf_yq_bin`、`wf_broken_case`、`mutate`、`contract_*`、
+  `entry_*`、`runner_*`、`managed_*`、`lock_*`、`t2602_*` などの補助と、変数
+  （`MODE`、`CONTRACT_FREE`、`COLLECT_DEF`、`CI_FAKES`、`SMOKE_HOLDER`、`SMOKE_ID_RE`、`WF`）。
+
+### 13.8 段階2の第3区切り（完了）
+
+- 移したもの: `wf_yq_bin`、`wf_broken_case`、`gate_has`、`gate_sources`、`gate_m09_block`
+  （それぞれの説明コメントを含む）。`tests/bats/helpers/m09-lib.bash` へ字句のまま移した。
+- 確認: 入口の unit は 240 件すべて通過。shellcheck（`sh` の方言）は通過。入口に残る定義は 0。
+- 残り: `mutate`、`desc_mutate`、`derive`、`runner_*`、`entry_*`、`contract_*`、`managed_*`、`lock_*`、
+  `t2602_*`、`render_*`、`check_production`、`compare_*`、`seq_*`、`has_text`、`fr920_hits`、`swsc_*`、
+  `smoke_item`。変数（`MODE`、`CONTRACT_FREE`、`COLLECT_DEF`、`CI_FAKES`、`SMOKE_HOLDER`、`SMOKE_ID_RE`、`WF`）。
+
+### 13.9 段階2の第4区切り（完了）
+
+- 移したもの（14 個）:
+  `fr920_hits`、`render_local`、`mutate`、`render_production`、
+  `check_production`、`derive`、`has_text`、`seq_before`、
+  `seq_last_is`、`seq_line`、`compare_cli`、`compare_mismatch`、
+  `desc_mutate`、`runner_mutate`。
+- 移し先は `tests/bats/helpers/m09-lib.bash`。定義は字句のまま。
+- 確認: 入口の unit は 240 件すべて通過。shellcheck は通過。入口に残る定義は 0。
+- 残り: `runner_*`（`runner_setup`、`runner_run`、`runner_docker_args`）、`entry_*`、`contract_*`、`managed_*`、`lock_*`、`t2602_*`、`swsc_*`、`smoke_item`。変数（`MODE`、`CONTRACT_FREE`、`COLLECT_DEF`、`CI_FAKES`、`SMOKE_HOLDER`、`SMOKE_ID_RE`、`WF`）。
+
+### 13.10 段階2の第5区切り（完了）
+
+- 移したもの（7 個）:
+  `runner_setup`、`runner_run`、`runner_docker_args`、
+  `entry_sandbox`、`entry_fakes`、`entry_setup`、`entry_run`。
+- 移し先は `tests/bats/helpers/m09-lib.bash`。定義は字句のまま。
+- 確認: 入口の unit は 240 件すべて通過。shellcheck は通過。入口に残る定義は 0。
+- 残り: `contract_*`、`managed_*`、`lock_*`、`t2602_*`、`swsc_*`、`smoke_item`。変数（`MODE`、`CONTRACT_FREE`、`COLLECT_DEF`、`CI_FAKES`、`SMOKE_HOLDER`、`SMOKE_ID_RE`、`WF`）。
+
+### 13.11 段階2の第6区切り（完了）
+
+- 移したもの（13 個）:
+  `contract_fakes`、`contract_base`、`contract_setup`、`contract_run`、
+  `contract_go`、`contract_item`、`contract_no_ministack`、
+  `contract_c1`、`contract_c2`、`contract_c3`、`contract_c4`、
+  `contract_c5`、`contract_c6`。
+- 移し先は `tests/bats/helpers/m09-lib.bash`。定義は字句のまま。
+- 逸脱（記録）: `contract_c1` から `contract_c6` は、contract モードの検査の実装である。
+  段階4で承認した「smoke と contract の実装は入口に残す」からは外れる。
+  入口は、この補助ファイルを読んで contract モードを動かす。入口の unit は 240 件すべて通過。
+- 残り: `managed_*`、`lock_*`、`t2602_*`、`swsc_*`、`smoke_item`。変数（`MODE`、`CONTRACT_FREE`、`COLLECT_DEF`、`CI_FAKES`、`SMOKE_HOLDER`、`SMOKE_ID_RE`、`WF`）。
+
+### 13.12 段階2の第7区切り（完了）
+
+- 移したもの（7 個）:
+  `managed_setup`、`managed_run`、`lock_case_dir`、
+  `lock_case_clear`、`lock_busy_setup`、
+  `t2602_fake_docker`、`t2602_fake_curl`。
+- 移し先は `tests/bats/helpers/m09-lib.bash`。定義は字句のまま。
+- 確認: 入口の unit は 240 件すべて通過。shellcheck は通過。入口に残る定義は 0。
+- 残り: `swsc_stop`、`swsc_collect`、`swsc_test_run`（入口の文字列の中の擬似の関数の可能性があるため、後で確かめる）、`smoke_item`。変数（`MODE`、`CONTRACT_FREE`、`COLLECT_DEF`、`CI_FAKES`、`SMOKE_HOLDER`、`SMOKE_ID_RE`、`WF`）。
+
+### 13.13 段階2の第8区切り（swsc 系の確認と、変数の扱いの決定）
+
+- 確かめた結果: `swsc_stop`、`swsc_collect`、`swsc_test_run` は関数ではない。
+  入口の `CI_FAKES` という一重引用符の文字列の中に書かれた、偽の関数の定義である。
+  実行時に子の sh で定義されるデータなので、関数として移さない。
+- 変数（`MODE`、`CONTRACT_FREE`、`COLLECT_DEF`、`CI_FAKES`、`SMOKE_HOLDER`、`SMOKE_ID_RE`、`WF`）は、
+  入口に残す。理由: 入口の関数が読む変数の位置を変えると、字句のまま移す方針を崩すため。
+- 前回の試行（区切り 8）は、`CI_FAKES` の 4 行目の `swsc_collect` を外に出し、
+  `CI_FAKES` を 3 行にした。この状態で unit は 240 件中 239 件に減った（`test:ci` の 4 件）。
+  `CI_FAKES` を元の 4 行に戻して解消した。
+- 確認: 入口の unit は 240 件すべて通過。`shellcheck -s sh -S style`（入口）と
+  `-s bash -S style`（`m09-lib.bash`）は通過。`sh scripts/quality-gate.sh` は通過
+  （unit 240、smoke 11）。
+- 残り: 入口に残るのは、`smoke_item` と変数だけ。T-R0346（入口に補助の定義が残らない検査）は、
+  変数と `smoke`、`contract` の実装を理由に、次の判断を人に求める。
+
+### 13.14 レビュー後の修正（検査の効き方の修正）
+
+- 発見: `tests/bats/m09-execution-and-ci.bats` の `setup` が `set +eu` で errexit を切っていた。
+  その結果、`|| return 1` で失敗した検査が成功扱いになっていた（最小の再現で確認）。
+  修正: `set +u` にして -e を残す。
+- 同じ修正で表に出た失敗は2件。どちらも `コマンド; rc=$?` の形で、非 0 の終了で止まっていた。
+  `|| rc=$?` の形に直した（gitleaks の印の検査、actionlint の式の検査）。
+- `t_json_extraction_uses_jq` を、入口と補助（`m09-lib.bash`）の両方を読むように直した。
+  補助へ禁止のパターンを一時的に足すと、検査が落ちることを確かめ、元に戻した。
+- `m09-lib.bash` の先頭の説明コメントを、`TMP` と `total` と `failures` の説明に直した。
+- 確認: bats の unit は 240 件中 240 件通過（2回連続）。
