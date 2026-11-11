@@ -14,7 +14,7 @@ HTTP クライアントの堅牢性を担保するためには、
 相手先サーバーからのエラー応答（500, 503 等）や通信遅延に対する
 リトライ制御・フェイルオーバーが正しく機能するかを検証する必要がある。
 
-本プロジェクトでは、ECS のタスク定義におけるサイドカーパターンをローカル（Ministack 等）
+本プロジェクトでは、ECS のタスク定義におけるサイドカーパターンをローカル
 および CI 環境でエミュレーションし、安全かつ再現性の高い障害シミュレーション環境を提供する。
 
 ## 3. システム構成要件
@@ -61,11 +61,11 @@ HTTP クライアントの堅牢性を担保するためには、
 
 ## 6. 前提技術スタック
 
-- **Local Emulation**: ECS タスク定義方式（`docker run` と pause 共有 namespace。Ministack/LocalStack 等）
+- **Local Emulation**: ECS タスク定義方式（`docker run` と pause 共有 namespace）
 - **Container Orchestration（本番）**: AWS ECS（Fargate または EC2）、awsvpc ネットワークモード
 - **Proxy**: Squid（OSS フォワードプロキシ）
 - **Mock Server**: WireMock
-- **IaC & Automation**: ECS タスク定義（テンプレートから生成）、Shell Scripts、AWS CLI
+- **IaC & Automation**: ECS タスク定義（テンプレートから生成）、Shell Scripts
 
 ## 7. 成果物リスト
 

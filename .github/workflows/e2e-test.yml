@@ -14,11 +14,6 @@ permissions:
 concurrency:
   group: ${{ github.workflow }}-${{ github.event_name == 'pull_request' && github.ref || github.sha }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
-# Why not: 既定の認証情報（~/.aws や実 AWS）に頼らない。ダミーの値とリージョンを明示する（FR-905）。
-env:
-  AWS_ACCESS_KEY_ID: test
-  AWS_SECRET_ACCESS_KEY: test
-  AWS_DEFAULT_REGION: ap-northeast-1
 jobs:
   e2e:
     runs-on: ubuntu-24.04
