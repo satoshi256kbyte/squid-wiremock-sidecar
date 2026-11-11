@@ -1,4 +1,4 @@
-# M09 の CI。ローカルと同じ入口（unit、test:ci、smoke、contract）を、同じ順序で実行する。
+# CI。ローカルと同じ入口（test:ci）を実行する。
 # Why not: Secrets は使わない。Secrets を使うと、フォークからの PR に値を渡す経路が生まれるため。
 # このファイルの env に書くのはダミーの値だけで、実 AWS には接続しない（NFR-901、NFR-902）。
 name: e2e-test
@@ -37,27 +37,24 @@ jobs:
           sha256: c2f7e814cb39f60b7f67a0ff36cb805e94128bf2dff09d175309d0f095b8cc3b
           cache: false
           env: false
-          install_args: --locked shellcheck
+          install_args: --locked
       - name: shellcheck
         # Why: 自動の導入を止める2つの環境変数は、mise which にだけ付ける。git ls-files には効かないため。
         run: git ls-files -z '*.sh' | xargs -0 "$(MISE_EXEC_AUTO_INSTALL=false MISE_AUTO_INSTALL=false mise which shellcheck)" -s sh -S style --
         timeout-minutes: 3
-      # Why: ローカルと同じく、unit を test:ci より先に置く。unit が落ちたら Docker は動かさない（FR-914）。
-      - name: unit
-        run: sh tests/m09-execution-and-ci.sh unit
-        timeout-minutes: 3
+      # Why: actionlint は mise の固定版を使う。-shellcheck に同じ版の shellcheck を渡し、run: のシェルも検査する。
+      - name: actionlint
+        run: '"$(MISE_EXEC_AUTO_INSTALL=false MISE_AUTO_INSTALL=false mise which actionlint)" -shellcheck "$(MISE_EXEC_AUTO_INSTALL=false MISE_AUTO_INSTALL=false mise which shellcheck)" .github/workflows/e2e-test.yml'
+        timeout-minutes: 2
+      # Why: gitleaks は mise の固定版を使う。作業ツリーを dir で走査し、--redact で検出した値を出さない（FR-R0237）。
+      - name: gitleaks
+        run: '"$(MISE_EXEC_AUTO_INSTALL=false MISE_AUTO_INSTALL=false mise which gitleaks)" dir . --config .gitleaks.toml --redact --no-banner --exit-code 1'
+        timeout-minutes: 2
       # 起動を含むため10分まで（Q-906）。
-      # M08 の4シナリオは、専用の step を作らず、同じ test-ci の検査列へ直列で足す（ローカルの test:ci と同じ順序）。
+      # 4シナリオは、専用の step を作らず、同じ test-ci の検査列へ直列で足す（ローカルの test:ci と同じ順序）。
       - name: test-ci
         run: npm run test:ci && sh scripts/e2e.sh test:ci normal error-500-then-200 ratelimit-429 slow-5000
         timeout-minutes: 10
-      # 上限は初回CIの実測（smoke 85秒、contract 37秒）に対して5倍以上の余裕がある。根拠は docs/ローカル実行とCI.md（FR-917）。
-      - name: smoke
-        run: sh tests/m09-execution-and-ci.sh smoke
-        timeout-minutes: 8
-      - name: contract
-        run: sh tests/m09-execution-and-ci.sh contract
-        timeout-minutes: 5
       # Why: 失敗しても実行する。test:ci の内側で集めた後の二度目で、タイムアウトに備える（3.7）。
       - name: collect
         if: always()

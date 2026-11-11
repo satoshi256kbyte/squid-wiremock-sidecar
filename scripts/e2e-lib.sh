@@ -172,14 +172,32 @@ swsc_stage_squid_context() { # 出力先ディレクトリ
   cp "$SWSC_ROOT/ecs/squid/entrypoint.sh" "$1/entrypoint.sh"
 }
 
+# jq の実体を、固定版の照合（resolve_tool）で得る。SWSC_JQ が設定されていれば照合せずに使う。
+# 無ければ呼び出しごとに照合する。コマンド置換の中で SWSC_JQ を設定しても、親のシェルには残らないため。
+# Why: 読み込みに副作用を持たせず、jq が要る関数の中で照合する。未導入や版違いは導入手順つきで失敗する。
+swsc_jq() {
+  if [ -z "${SWSC_JQ:-}" ]; then
+    # shellcheck source=/dev/null
+    . "$SWSC_ROOT/scripts/lib/resolve-tool.sh"
+    resolve_tool jq 's/^jq-//p' --version || return 1
+    SWSC_JQ=$RESOLVED_PATH
+  fi
+  printf '%s' "$SWSC_JQ"
+}
+
+# 標準入力の __admin/requests の本文から、/api/ で始まる URL の件数を出す。
+# Why: 経路の接頭辞だけで数える。/squid-internal-periodic/ の要求は数えない（G1、G3）。
+swsc_count_api_requests() {
+  _jq=$(swsc_jq) || return 1
+  "$_jq" '[(.requests // [])[] | select(((.request.url // "") | tostring) | startswith("/api/"))] | length'
+}
+
 # WireMock が受けた /api/ の要求の件数を返す。
 # Why: Squid が起動後に送る /squid-internal-periodic/ の要求を数えないため（G1、G3）。
 # Why not meta.total: 同じ理由で、件数が1つずれる。
 swsc_wiremock_total() {
   _body=$(curl -fsS --max-time 5 http://127.0.0.1:8080/__admin/requests) || return 1
-  printf '%s' "$_body" | python3 -B -c "import json, sys
-d = json.load(sys.stdin)
-print(sum(1 for r in d.get('requests', []) if str(r.get('request', {}).get('url', '')).startswith('/api/')))"
+  printf '%s' "$_body" | swsc_count_api_requests
 }
 
 # 指定した経路と完全一致する URL の受信数を返す。取得や解析に失敗したら1。
@@ -484,8 +502,8 @@ swsc_test_ci_main() {
   exit "$_rc"
 }
 
-# test:ci の名前指定。M08 の代表4シナリオから選んだものだけを、test:ci のロックの下で実行する。
-# Why: 起動、実行、収集、停止は tests/m08-e2e-suite.sh が持つ。ここは名前の検査、ロック、子への引き渡しだけを行う。
+# test:ci の名前指定。代表4シナリオから選んだものだけを、test:ci のロックの下で実行する。
+# Why: 起動、実行、収集、停止は scripts/e2e-scenarios.sh が持つ。ここは名前の検査、ロック、子への引き渡しだけを行う。
 # Why: 子には SWSC_LOCK_HELD=1 を渡し、ロックを二重に取らない（test:ci の規約）。
 swsc_test_ci_scenarios() { # シナリオ名...
   for _n in "$@"; do
@@ -519,10 +537,10 @@ swsc_test_ci_scenarios() { # シナリオ名...
   exit "$_rc"
 }
 
-# test:ci の名前指定の子。M08 の smoke を、親のロックの下（SWSC_LOCK_HELD=1）で動かす。
+# test:ci の名前指定の子。代表4シナリオを、親のロックの下（SWSC_LOCK_HELD=1）で動かす。
 # Why: 関数に分けるのは、unit で子を差し替えて、信号とロックの扱いだけを確かめるため。
 swsc_test_ci_scenarios_child() { # シナリオ名...
-  SWSC_LOCK_HELD=1 exec sh "$SWSC_ROOT/tests/m08-e2e-suite.sh" smoke "$@"
+  SWSC_LOCK_HELD=1 exec sh "$SWSC_ROOT/scripts/e2e-scenarios.sh" "$@"
 }
 
 # 子が動いていれば TERM を送り、終わるまで待つ。動いていなければ何もしない。冪等。
