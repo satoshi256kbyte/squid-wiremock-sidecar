@@ -6,17 +6,10 @@ SWSC_PREFIX=swsc-
 SWSC_LABEL=swsc.managed=true
 # shellcheck disable=SC2034 # scripts/e2e-runner.sh が $SWSC_NET を使う（ネットワーク作成と接続）
 SWSC_NET=swsc-net
-SWSC_MINISTACK_IMAGE=ministackorg/ministack:1.5.37
 # shellcheck disable=SC2034 # scripts/e2e-runner.sh が $SWSC_PAUSE_IMAGE を使う（pause 共有 namespace）
 SWSC_PAUSE_IMAGE=alpine:3.20
 # shellcheck disable=SC2034 # scripts/e2e-runner.sh が $SWSC_WIREMOCK_IMAGE を使う（WireMock の起動）
 SWSC_WIREMOCK_IMAGE=wiremock/wiremock:3.13.1
-SWSC_MINISTACK_ENDPOINT=http://127.0.0.1:4566
-SWSC_REGION=ap-northeast-1
-# shellcheck disable=SC2034 # scripts/e2e-contract.sh が $SWSC_MINISTACK_NAME を使う（コンテナの起動と照合）
-SWSC_MINISTACK_NAME=swsc-ministack
-# shellcheck disable=SC2034 # scripts/e2e-contract.sh が $SWSC_MINISTACK_PORT を使う（ポートの確認と公開）
-SWSC_MINISTACK_PORT=4566
 # Why: 出力先を既定の .e2e から変えられるようにする。検査の unit が一時領域へ向けるため。
 : "${SWSC_E2E_DIR:=${SWSC_ROOT:-}/.e2e}"
 # 収集したログの出力先（FR-921）。unit が一時領域へ向けられるように、既定の場所だけを変数に置く。
@@ -29,7 +22,7 @@ SWSC_DIR_MARKER=.swsc-managed
 SWSC_MOCK_PORT=8080
 # Squid が Client から使うプロキシの待ち受け。start の前に空きを確かめる（T2603）。
 SWSC_SQUID_PORT=3128
-# 手元の起動（start、contract）で使う完成版の入力。start と contract が同じ値を使うため1か所に置く。
+# 手元の起動（start）で使う完成版の入力。
 SWSC_LOCAL_CLIENT_IMAGE=swsc-client:e2e
 SWSC_LOCAL_SQUID_IMAGE=swsc-squid:e2e
 SWSC_LOCAL_MOCK_HOST=swsc-wiremock
@@ -39,23 +32,6 @@ SWSC_LOCAL_MOCK_PORT=8080
 swsc_need_cmd() { # コマンド名
   if ! command -v "$1" >/dev/null 2>&1; then
     printf '前提不足: %s が見つからない\n' "$1" >&2
-    return 1
-  fi
-}
-
-# ダミー認証情報を検査する。値は表示せず、変数名だけを示す。
-# Why: 既定の認証情報（~/.aws、既定プロファイル）へ切り替えないため、未設定と test 以外を止める（FR-905）。
-swsc_check_creds() {
-  if [ -n "${AWS_PROFILE:-}" ]; then
-    printf '前提不足: AWS_PROFILE が設定されている。ダミー認証情報だけを使う\n' >&2
-    return 1
-  fi
-  if [ "${AWS_ACCESS_KEY_ID:-}" != test ]; then
-    printf '前提不足: AWS_ACCESS_KEY_ID がダミー値（test）ではない、または未設定\n' >&2
-    return 1
-  fi
-  if [ "${AWS_SECRET_ACCESS_KEY:-}" != test ]; then
-    printf '前提不足: AWS_SECRET_ACCESS_KEY がダミー値（test）ではない、または未設定\n' >&2
     return 1
   fi
 }
@@ -70,27 +46,6 @@ swsc_check_smoke_prereq() {
 # 停止と後始末の前提。
 swsc_check_stop_prereq() {
   swsc_need_cmd docker || return 1
-}
-
-# MiniStackの契約検証（contract層）の前提。認証情報は、aws と docker を呼ぶ前に検査する。
-swsc_check_contract_prereq() {
-  swsc_need_cmd docker || return 1
-  swsc_need_cmd aws || return 1
-  swsc_need_cmd python3 || return 1
-  swsc_check_creds || return 1
-}
-
-# AWS CLI の呼び出しの唯一の入口。毎回 MiniStack の宛先を明示し、既定の認証情報を読ませない。
-# Why: AWS 設定ファイルと既定プロファイルを、この1回の呼び出しから外すため（FR-905）。
-# Why not: 接続と読み取りに時間制限を付けるのは、応答しない MiniStack で待ち続けないため（待機の上限は呼び出し側で持つ）。
-swsc_aws() {
-  swsc_check_creds || return 1
-  env -u AWS_PROFILE \
-    AWS_CONFIG_FILE=/dev/null \
-    AWS_SHARED_CREDENTIALS_FILE=/dev/null \
-    AWS_EC2_METADATA_DISABLED=true \
-    aws --endpoint-url "$SWSC_MINISTACK_ENDPOINT" --region "$SWSC_REGION" \
-    --cli-connect-timeout 5 --cli-read-timeout 30 "$@"
 }
 
 # 出力先を、書き込める状態にする。目印を置いたディレクトリだけを、自分のものとして扱う。
@@ -116,7 +71,7 @@ swsc_prepare_dir() { # ディレクトリ
   : >"$1/$SWSC_DIR_MARKER"
 }
 
-# 手元の起動の完成版を、start と contract と同じ入力で作る。
+# 手元の起動の完成版を作る。
 swsc_render_local() { # 出力先
   swsc_render "$1" "$SWSC_LOCAL_CLIENT_IMAGE" "$SWSC_LOCAL_SQUID_IMAGE" local mock "$SWSC_LOCAL_MOCK_HOST" "$SWSC_LOCAL_MOCK_PORT"
 }
@@ -148,7 +103,7 @@ swsc_mask() {
     -e 's/(^|[^0-9A-Za-z-])[0-9]{12}([^0-9A-Za-z-]|$)/\1<ACCOUNT_ID>\2/g'
 }
 
-# 完成版のタスク定義を作る唯一の経路。start と contract は、同じ入力でこの関数を呼ぶ。
+# 完成版のタスク定義を作る唯一の経路。
 # Why: 登録用と起動用で生成手順を分けると、比較の前提が崩れるため（FR-903）。
 swsc_render() { # 出力先 クライアントイメージ Squidイメージ プロファイル 上流 [mockホスト mockポート]
   # Why: 生成の呼び出しを1か所にまとめる。mock の宛先が無いときは空文字で渡し、
@@ -626,22 +581,22 @@ swsc_clean() {
   return "$_clean_rc"
 }
 
-# 名前を指定したコンテナのログを表示する。名前は4つに限り、残りの引数は docker logs へ渡す。
+# 名前を指定したコンテナのログを表示する。名前は3つに限り、残りの引数は docker logs へ渡す。
 swsc_logs() {
   case ${1:-} in
     '')
-      for _n in squid wiremock ministack pause; do
+      for _n in squid wiremock pause; do
         printf '== %s\n' "$_n"
         docker logs "${SWSC_PREFIX}${_n}" 2>&1 || true
       done
       ;;
-    squid | wiremock | ministack | pause)
+    squid | wiremock | pause)
       _n=$1
       shift
       docker logs "$@" "${SWSC_PREFIX}${_n}"
       ;;
     *)
-      printf 'FAIL: logs の名前は squid、wiremock、ministack、pause のどれか\n' >&2
+      printf 'FAIL: logs の名前は squid、wiremock、pause のどれか\n' >&2
       return 2
       ;;
   esac
@@ -679,12 +634,9 @@ swsc_collect_env() {
       printf 'image %s: %s\n' "$_i" "$(docker image inspect --format '{{.Id}}' "$_i" 2>/dev/null || echo 取得不可)"
     done
     # Why: 派生イメージの Id だけでは、基底の ubuntu/squid:latest がどの版だったかを後から特定できない（レビュー M-3）。
-    # Why not: aws --version は書かない。collect は AWS CLI を呼ばない経路のため（FR-905）。版は contract の結果に残す。
-    for _i in ubuntu/squid:latest "$SWSC_MINISTACK_IMAGE"; do
-      printf 'base %s: %s\n' "$_i" \
-        "$(docker image inspect --format '{{index .RepoDigests 0}}' "$_i" 2>/dev/null || echo 取得不可)"
-    done
-    for _n in squid wiremock ministack; do
+    printf 'base ubuntu/squid:latest: %s\n' \
+      "$(docker image inspect --format '{{index .RepoDigests 0}}' ubuntu/squid:latest 2>/dev/null || echo 取得不可)"
+    for _n in squid wiremock; do
       docker inspect --format 'name={{.Name}} image={{.Config.Image}} id={{.Image}}' "${SWSC_PREFIX}${_n}" \
         2>/dev/null || true
     done
@@ -731,15 +683,12 @@ swsc_collect() {
   swsc_prepare_dir "$SWSC_LOG_DIR" || return 1
   mkdir -p "$SWSC_LOG_DIR/containers" "$SWSC_LOG_DIR/squid" || return 1
   : >"$SWSC_LOG_DIR/scrub.txt" || return 1
-  for _n in squid wiremock ministack; do
+  for _n in squid wiremock; do
     swsc_collect_from_command "containers/${SWSC_PREFIX}${_n}.log" docker logs "${SWSC_PREFIX}${_n}"
   done
   swsc_collect_from_command squid/access.log docker exec "${SWSC_PREFIX}squid" cat /var/log/squid/access.log
   swsc_collect_from_command squid/cache.log docker exec "${SWSC_PREFIX}squid" cat /var/log/squid/cache.log
   swsc_collect_copy taskdef.json "$SWSC_E2E_DIR/taskdef.json"
-  swsc_collect_copy ministack-contract.json "$SWSC_E2E_DIR/ministack-contract.json"
-  swsc_collect_copy ministack-describe.json "$SWSC_E2E_DIR/ministack-describe.json"
-  swsc_collect_copy ministack-inspect.json "$SWSC_E2E_DIR/ministack-inspect.json"
   for _f in test.out test.err; do
     if [ ! -f "$SWSC_LOG_DIR/$_f" ]; then printf '%s\n' "$_f" >>"$SWSC_LOG_DIR/missing.txt"; fi
   done
@@ -751,7 +700,7 @@ swsc_collect() {
   return 0
 }
 
-# T2601: 固定ポート（8080、3128、4566）を、同時に1つの実行だけが使うためのロック。
+# T2601: 固定ポート（8080、3128）を、同時に1つの実行だけが使うためのロック。
 # Why: ホスト全体の資源なので、並列の実行が互いのポートを壊さないようにするため。
 # Why not: $TMPDIR に置く。プロセスや端末ごとに異なり、別のシェル間で排他が効かないため。
 # Why not: 古いロックの自動削除。実行中の他者のロックを壊すため。利用者が確かめてから手動で消す。
@@ -797,7 +746,7 @@ swsc_lock_release() {
   rmdir "$_lock"
 }
 
-# 入口（start、test、test:ci、contract）の最初に呼ぶ。取れれば0、取れなければ標準エラーに示して1。
+# 入口（start、test、test:ci）の最初に呼ぶ。取れれば0、取れなければ標準エラーに示して1。
 # 取れなかった入口は、trap も後始末も設定せずに止まる（他の実行の swsc- を止めないため）。
 # Why: 同じシェルの中で2回取らないよう SWSC_LOCK_HELD を見る。test:ci のように入口が入れ子で呼ぶ
 #      操作でも、取得は1回に保てるため。export しないのは、子プロセスが自分の取ったロックと誤認しないため。
