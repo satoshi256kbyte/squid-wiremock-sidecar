@@ -22,9 +22,8 @@
       "image": "{{SQUID_IMAGE}}",
       "essential": true,
       "environment": [{ "name": "SQUID_UPSTREAM", "value": "{{SQUID_UPSTREAM}}" }],
-      "portMappings": [{ "containerPort": 3128, "protocol": "tcp" }],
       "healthCheck": {
-        "command": ["CMD-SHELL", "kill -0 1"],
+        "command": ["CMD-SHELL", "bash -c 'exec 3<>/dev/tcp/127.0.0.1/3128'"],
         "interval": 5,
         "timeout": 3,
         "retries": 5,

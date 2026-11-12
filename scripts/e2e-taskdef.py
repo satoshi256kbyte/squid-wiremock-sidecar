@@ -17,13 +17,27 @@ UPSTREAM_RE = re.compile(r"\A[A-Za-z0-9_-]{1,32}\Z")
 HOST_RE = re.compile(r"\A[A-Za-z0-9.-]{1,253}\Z")
 DIGITS_RE = re.compile(r"\A[0-9]{1,5}\Z")
 ENV_NAME_RE = re.compile(r"\A[A-Z][A-Z0-9_]*\Z")
+# Client が叩く先。Why: スキームとホスト（とポート）だけを許す。パスや認証情報を入れて値が漏れないようにする。
+API_BASE_URL_RE = re.compile(r"\Ahttps?://[A-Za-z0-9.-]{1,253}(:[0-9]{1,5})?\Z")
+LOG_GROUP_RE = re.compile(r"\A[A-Za-z0-9_/.#-]{1,512}\Z")
+LOG_REGION_RE = re.compile(r"\A[a-z]{2}(-[a-z]+)+-[0-9]\Z")
+ROLE_ARN_RE = re.compile(r"\Aarn:aws[a-z-]*:iam::[0-9]{12}:role/[A-Za-z0-9+=,.@_/-]{1,512}\Z")
+LOG_STREAM_PREFIX = "swsc-e2e"
+API_BASE_URL_ENV = "TEST_API_BASE_URL"
+# Client が使うプロキシ。Why: ローカルのエミュレータは、同じタスクのコンテナで 127.0.0.1 を共有しないため、
+# Squid に付けた別名へ向ける。本番は 127.0.0.1:3128 のままにするので、本番では指定を拒否する。
+PROXY_URL_RE = re.compile(r"\Ahttp://[A-Za-z0-9.-]{1,253}:[0-9]{1,5}\Z")
+PROXY_ENV_NAMES = ("HTTP_PROXY", "HTTPS_PROXY")
 WHOLE_PLACEHOLDER_RE = re.compile(r"\A\{\{([A-Z_]+)\}\}\Z")
 LEFTOVER_RE = re.compile(r"\{\{|\}\}")
 
 # 許可リスト。Why: 許可しない項目（volumes、secrets など）を黙って通さず、名指しで止めるため（Q-913）。
-TOP_KEYS = {"family", "networkMode", "requiresCompatibilities", "cpu", "memory", "containerDefinitions"}
+TOP_KEYS = {"family", "networkMode", "requiresCompatibilities", "cpu", "memory", "containerDefinitions",
+            "executionRoleArn", "taskRoleArn"}
 CONTAINER_KEYS = {"name", "image", "essential", "environment", "portMappings", "dependsOn",
-                  "healthCheck", "command", "entryPoint"}
+                  "healthCheck", "command", "entryPoint", "logConfiguration"}
+LOG_KEYS = {"logDriver", "options"}
+LOG_OPTION_KEYS = {"awslogs-group", "awslogs-region", "awslogs-stream-prefix"}
 ENV_KEYS = {"name", "value"}
 PORT_KEYS = {"containerPort", "protocol"}
 DEPENDS_KEYS = {"containerName", "condition"}
@@ -38,15 +52,6 @@ PLACEHOLDER_CHECKS = {
 
 
 MOCK_ENV_NAMES = {"SQUID_MOCK_HOST", "SQUID_MOCK_PORT"}
-
-# docker-args の検査。Why: 名前とラベルは、停止と後始末が対象を選ぶ根拠になるため、形式を絞る。
-PAUSE_NAME_RE = re.compile(r"\Aswsc-[a-z0-9-]{1,40}\Z")
-RUN_ID_RE = re.compile(r"\A[A-Za-z0-9]{1,32}\Z")
-CONTAINER_NAME_RE = re.compile(r"\A[a-z][a-z0-9-]{0,40}\Z")
-INSTANCE_PREFIX = "swsc-"  # Why: scripts/e2e-lib.sh の SWSC_PREFIX と同じ値を、変換単体で使えるように持つ。
-LABEL = "swsc.managed=true"  # Why: scripts/e2e-lib.sh の SWSC_LABEL と同じ値（停止の対象の判定に使う）。
-CONTROL_RE = re.compile(r"[\x00-\x1f\x7f]")
-
 
 class Invalid(Exception):
     """検査に通らない入力。メッセージに値は書かず、項目の名前と理由だけを書く。"""
@@ -147,6 +152,15 @@ def check_container(container):
     for key in ("command", "entryPoint"):
         if key in container:
             check_string_list(container[key], f"{where} の {key}")
+    if "logConfiguration" in container:
+        log = container["logConfiguration"]
+        if not isinstance(log, dict):
+            raise Invalid(f"{where} の logConfiguration が不正")
+        reject_unknown(log, LOG_KEYS, f"{where} の logConfiguration")
+        options = log.get("options")
+        if log.get("logDriver") != "awslogs" or not isinstance(options, dict):
+            raise Invalid(f"{where} の logConfiguration は awslogs の形式だけ")
+        reject_unknown(options, LOG_OPTION_KEYS, f"{where} の logConfiguration.options")
 
 
 def check_structure(doc):
@@ -196,12 +210,59 @@ def validate_option(name, value, pattern):
         raise Invalid(f"{name} の値の形式が不正")
 
 
+def apply_overrides(doc, args):
+    """任意の引数（宛先URL、ログ、ロール）を完成版へ反映する。指定が無い項目は触らない。"""
+    if args.api_base_url:
+        validate_option("--api-base-url", args.api_base_url, API_BASE_URL_RE)
+        client = next((c for c in doc.get("containerDefinitions", []) if c.get("name") == "client"), None)
+        if client is None:
+            raise Invalid("client コンテナが無い")
+        env = [e for e in client.get("environment", []) if e.get("name") != API_BASE_URL_ENV]
+        env.append({"name": API_BASE_URL_ENV, "value": args.api_base_url})
+        client["environment"] = env
+
+    if args.proxy_url:
+        validate_option("--proxy-url", args.proxy_url, PROXY_URL_RE)
+        client = next((c for c in doc.get("containerDefinitions", []) if c.get("name") == "client"), None)
+        if client is None:
+            raise Invalid("client コンテナが無い")
+        env = [e for e in client.get("environment", []) if e.get("name") not in PROXY_ENV_NAMES]
+        env += [{"name": name, "value": args.proxy_url} for name in PROXY_ENV_NAMES]
+        client["environment"] = env
+
+    if (args.log_group is None) != (args.log_region is None):
+        raise Invalid("--log-group と --log-region は両方指定する")
+    if args.log_group is not None:
+        validate_option("--log-group", args.log_group, LOG_GROUP_RE)
+        validate_option("--log-region", args.log_region, LOG_REGION_RE)
+        for container in doc.get("containerDefinitions", []):
+            container["logConfiguration"] = {
+                "logDriver": "awslogs",
+                "options": {
+                    "awslogs-group": args.log_group,
+                    "awslogs-region": args.log_region,
+                    "awslogs-stream-prefix": LOG_STREAM_PREFIX,
+                },
+            }
+
+    for option, key, value in (("--execution-role-arn", "executionRoleArn", args.execution_role_arn),
+                               ("--task-role-arn", "taskRoleArn", args.task_role_arn)):
+        if value:
+            validate_option(option, value, ROLE_ARN_RE)
+            doc[key] = value
+
+
 def cmd_render(args):
     if args.profile == "production":
         if args.upstream != "direct":
             raise Invalid("本番向けでは --upstream は direct だけ")
         if args.mock_host is not None or args.mock_port is not None:
             raise Invalid("本番向けでは --mock-host と --mock-port を指定できない")
+        # Why: テンプレートの既定は http://api.example.com で、本番に残さないため。
+        if not args.api_base_url or not args.api_base_url.startswith("https://"):
+            raise Invalid("本番向けでは --api-base-url に https:// の URL が要る")
+        if args.proxy_url:
+            raise Invalid("本番向けでは --proxy-url を指定できない（127.0.0.1:3128 のままにする）")
     # 空文字は未指定として扱う。Why: 呼び出し側が1回の呼び出しで両方を渡せるようにするため。
     args.mock_host = args.mock_host or None
     args.mock_port = args.mock_port or None
@@ -234,6 +295,8 @@ def cmd_render(args):
             {"name": "SQUID_MOCK_PORT", "value": args.mock_port},
         ])
 
+    apply_overrides(doc, args)
+
     check_structure(doc)
     if args.profile == "production":
         findings = production_findings(doc)
@@ -262,199 +325,6 @@ def cmd_check_production(args):
     return 0
 
 
-def cmd_docker_args(args):
-    """完成版を、コンテナごとの docker run の引数へ変換する（pause方式。FR-906、FR-911）。
-
-    出力は全て検査を通してから書く。途中で失敗した場合に、不完全な引数が残らないようにするため。
-    値（環境変数）は引数に出さず、.env へ0600で書く。プロセス一覧に値を出さないため。
-    """
-    validate_option("--pause-name", args.pause_name, PAUSE_NAME_RE)
-    validate_option("--run-id", args.run_id, RUN_ID_RE)
-    doc = load_json(args.taskdef)
-    check_structure(doc)
-    check_leftovers(doc)
-    if doc.get("networkMode") != "awsvpc":
-        raise Invalid("変換の対象は awsvpc だけ")
-
-    containers = doc["containerDefinitions"]
-    names = [c["name"] for c in containers]
-    if len(set(names)) != len(names):
-        raise Invalid("コンテナ名が重複している")
-    instances = {}
-    for container in containers:
-        name = container["name"]
-        validate_option(f"コンテナ名 {name}", name, CONTAINER_NAME_RE)
-        # Why: image は docker run の引数の末尾側に置かれる。先頭が - だと docker がオプションとして読み、
-        # 許可リストの外のオプション（--privileged など）を通してしまう。render だけでなく、変換でも検査する。
-        image = container.get("image")
-        if not isinstance(image, str) or not IMAGE_RE.match(image) or image.startswith("-"):
-            raise Invalid(f"コンテナ定義 {name} の image が不正（英数字で始まる参照だけ）")
-        essential = container.get("essential")
-        if not isinstance(essential, bool):
-            raise Invalid(f"コンテナ定義 {name} の essential が真偽値ではない")
-        # Why: 必須のコンテナは固定名、任意のコンテナ（Client）は実行ごとの名前にし、同時実行で衝突させない。
-        instances[name] = f"{INSTANCE_PREFIX}{name}" if essential else f"{INSTANCE_PREFIX}{name}-{args.run_id}"
-
-    ports = {}
-    outputs = {}
-    for container in containers:
-        name = container["name"]
-        inst = instances[name]
-        for port in container.get("portMappings", []):
-            number = port["containerPort"]
-            if not 1 <= number <= 65535:
-                raise Invalid(f"コンテナ定義 {name} の containerPort が範囲外")
-            if number in ports and ports[number] != name:
-                # Why: awsvpc では同じ名前空間を共有するため、同じポートは2つのコンテナで使えない。
-                raise Invalid(f"containerPort {number} が複数のコンテナで重複している")
-            ports[number] = name
-
-        arg_list = container_docker_args(container, inst, args.pause_name, out_dir=args.out_dir)
-        outputs[f"{inst}.args"] = arg_list
-        env_lines = []
-        for env in container.get("environment", []):
-            # Why: 値を連結する前に検査する。連結後に改行を探すと、値の中の改行が行区切りに紛れて見えなくなるため。
-            if CONTROL_RE.search(env["value"]):
-                raise Invalid(f"コンテナ定義 {name} の環境変数に改行や制御文字が含まれる")
-            env_lines.append(f"{env['name']}={env['value']}\n")
-        outputs[f"{inst}.env"] = "".join(env_lines)
-        depends = []
-        for dep in container.get("dependsOn", []):
-            target = dep["containerName"]
-            if target not in instances or target == name:
-                raise Invalid(f"コンテナ定義 {name} の dependsOn が存在しない、または自分自身を指す")
-            depends.append(f"{dep['condition']} {instances[target]}")
-        outputs[f"{inst}.depends"] = "".join(line + "\n" for line in depends)
-
-    # Why: 検査と書き込みを分ける。1ファイルずつ検査して書くと、後ろのファイルで失敗したときに、
-    # 前のファイルだけが出力先に残るため（evidence-code-review の SHOULD）。
-    rendered = {}
-    for filename, content in outputs.items():
-        if isinstance(content, list):
-            for value in content:
-                if CONTROL_RE.search(value):
-                    raise Invalid(f"{filename} の値に改行や制御文字が含まれる")
-            content = "".join(value + "\n" for value in content)
-        elif CONTROL_RE.search(content.replace("\n", "")):
-            raise Invalid(f"{filename} の値に改行以外の制御文字が含まれる")
-        rendered[filename] = content
-    for filename, content in rendered.items():
-        write_private(os.path.join(args.out_dir, filename), content)
-    return 0
-
-
-def container_docker_args(container, inst, pause, out_dir):
-    """1コンテナ分の docker run の引数（1要素1行）。値は含めない（.env へ書く）。"""
-    name = container["name"]
-    out = [
-        "--name", inst,
-        "--label", LABEL,
-        "--label", f"swsc.role={name}",
-        "--network", f"container:{pause}",
-        "--env-file", os.path.join(out_dir, f"{inst}.env"),
-    ]
-    if "healthCheck" in container:
-        health = container["healthCheck"]
-        # Why: ECS の CMD-SHELL は docker の --health-cmd へ、1つの文字列として渡す。
-        out += [
-            "--health-cmd", health["command"][1],
-            "--health-interval", f"{health['interval']}s",
-            "--health-timeout", f"{health['timeout']}s",
-            "--health-retries", str(health["retries"]),
-            "--health-start-period", f"{health['startPeriod']}s",
-        ]
-    entry = container.get("entryPoint", [])
-    if entry:
-        # Why: docker の --entrypoint は1つの実行ファイルだけを取る。残りは image の後ろへ置く。
-        out += ["--entrypoint", entry[0]]
-    out.append(container["image"])
-    out += entry[1:] + container.get("command", [])
-    return out
-
-
-def write_private(path, content):
-    """0600 で書く。Why: 環境変数の値を、他の利用者が読めないようにするため（FR-905、NFR-906）。"""
-    flags = os.O_WRONLY | os.O_CREAT | os.O_TRUNC
-    fd = os.open(path, flags, 0o600)
-    with os.fdopen(fd, "w", encoding="utf-8") as f:
-        f.write(content)
-
-
-def normalize_container(container):
-    """比較する項目だけを取り出す。順序差は無くし、空の既定値（null、空の配列、空のオブジェクト）は同じ扱いにする。
-
-    Why: AWS が返す値の順序と既定の空項目は、完成版と同じ内容でも形が違うため（G2、G4）。
-    """
-    env = {e.get("name"): e.get("value") for e in container.get("environment") or []}
-    ports = sorted(((p.get("containerPort"), p.get("protocol")) for p in container.get("portMappings") or []),
-                   key=repr)
-    deps = sorted(((d.get("containerName"), d.get("condition")) for d in container.get("dependsOn") or []),
-                  key=repr)
-    return {
-        "image": container.get("image"),
-        "essential": container.get("essential"),
-        "environment": env,
-        "portMappings": ports,
-        "dependsOn": deps,
-        "healthCheck": container.get("healthCheck") or None,
-    }
-
-
-COMPARED_KEYS = ("image", "essential", "environment", "portMappings", "dependsOn", "healthCheck")
-
-
-def containers_by_name(containers, where):
-    if not isinstance(containers, list):
-        raise Invalid(f"{where} の containerDefinitions が配列ではない")
-    by_name = {}
-    for container in containers:
-        if not isinstance(container, dict) or not isinstance(container.get("name"), str):
-            raise Invalid(f"{where} のコンテナ定義の名前が無い")
-        if container["name"] in by_name:
-            raise Invalid(f"{where} のコンテナ名が重複している")
-        by_name[container["name"]] = container
-    return by_name
-
-
-def compare_docs(expected, actual):
-    """完成版と describe の差の項目名を返す。値は返さない（環境変数の値を出さないため）。"""
-    if not isinstance(expected, dict) or not isinstance(actual, dict):
-        raise Invalid("比較の入力がオブジェクトではない")
-    diffs = []
-    if expected.get("networkMode") != actual.get("networkMode"):
-        diffs.append("networkMode")
-    exp = containers_by_name(expected.get("containerDefinitions"), "完成版")
-    act = containers_by_name(actual.get("containerDefinitions"), "describe")
-    if set(exp) != set(act):
-        diffs.append("containerDefinitions（コンテナの名前の集合）")
-        return diffs
-    for name in sorted(exp):
-        want = normalize_container(exp[name])
-        got = normalize_container(act[name])
-        for key in COMPARED_KEYS:
-            if want[key] != got[key]:
-                diffs.append(f"containers.{name}.{key}")
-    return diffs
-
-
-def cmd_compare(args):
-    expected = load_json(args.taskdef)
-    actual = load_json(args.describe)
-    diffs = compare_docs(expected, actual)
-    if args.report:
-        report = {"result": "mismatch" if diffs else "match", "differences": diffs}
-        tmp_path = args.report + ".tmp"
-        with open(tmp_path, "w", encoding="utf-8") as f:
-            f.write(json.dumps(report, indent=2, ensure_ascii=False) + "\n")
-        os.replace(tmp_path, args.report)
-    if diffs:
-        for diff in diffs:
-            print(f"FAIL: 不一致: {diff}", file=sys.stderr)
-        return 1
-    print("OK: 登録とdescribeの比較が一致した")
-    return 0
-
-
 def build_parser():
     parser = argparse.ArgumentParser(description="M09 タスク定義の生成と検査")
     sub = parser.add_subparsers(dest="command", required=True)
@@ -468,24 +338,18 @@ def build_parser():
     render.add_argument("--upstream", required=True)
     render.add_argument("--mock-host")
     render.add_argument("--mock-port")
+    render.add_argument("--api-base-url", help="Client が叩く先（TEST_API_BASE_URL）。本番は https:// だけ")
+    render.add_argument("--proxy-url", help="Client のプロキシ（HTTP_PROXY、HTTPS_PROXY）。local だけ")
+    render.add_argument("--log-group", help="CloudWatch Logs のロググループ。--log-region と一緒に指定する")
+    render.add_argument("--log-region")
+    render.add_argument("--execution-role-arn")
+    render.add_argument("--task-role-arn")
     render.set_defaults(func=cmd_render)
 
     check = sub.add_parser("check-production", help="任意のタスク定義が本番向けの条件を満たすか検査する")
     check.add_argument("file")
     check.set_defaults(func=cmd_check_production)
 
-    dargs = sub.add_parser("docker-args", help="完成版を docker run の引数と .env、依存へ変換する")
-    dargs.add_argument("--taskdef", required=True)
-    dargs.add_argument("--out-dir", required=True)
-    dargs.add_argument("--pause-name", required=True)
-    dargs.add_argument("--run-id", required=True)
-    dargs.set_defaults(func=cmd_docker_args)
-
-    cmp_parser = sub.add_parser("compare", help="完成版と describe の出力を、順序と空の既定値を除いて比べる")
-    cmp_parser.add_argument("taskdef")
-    cmp_parser.add_argument("describe")
-    cmp_parser.add_argument("--report", help="結果（一致か、不一致の項目名）を書くJSONのパス")
-    cmp_parser.set_defaults(func=cmd_compare)
     return parser
 
 

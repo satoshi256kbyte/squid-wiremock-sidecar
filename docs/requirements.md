@@ -61,7 +61,7 @@ HTTP クライアントの堅牢性を担保するためには、
 
 ## 6. 前提技術スタック
 
-- **Local Emulation**: ECS タスク定義方式（`docker run` と pause 共有 namespace）
+- **Local Emulation**: ECS タスク定義方式（fakecloud で `register-task-definition` と `run-task`）
 - **Container Orchestration（本番）**: AWS ECS（Fargate または EC2）、awsvpc ネットワークモード
 - **Proxy**: Squid（OSS フォワードプロキシ）
 - **Mock Server**: WireMock

@@ -13,7 +13,7 @@ npm run test:ci    # 起動、検査、収集、停止を続けて実行する
 sh scripts/e2e.sh test:ci normal error-500-then-200 ratelimit-429 slow-5000  # 4シナリオ
 ```
 
-- 固定ポート 8080 と 3128 は、入口のロック（既定は `/tmp/swsc-e2e-ports.lock`）で1つの実行だけに限る。
+- 固定ポート 8080、14566、15000 は、入口のロック（既定は `/tmp/swsc-e2e-ports.lock`）で1つの実行だけに限る。
 - 失敗したときは、`e2e-logs/` に収集したログが残る。
 - 後片付けは `npm run stop`（資源の削除）と `npm run clean`（生成物と収集ログの削除）。
 

@@ -1,2 +1,3 @@
 api.example.com
 api-staging.example.com
+httpbin.org

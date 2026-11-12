@@ -4,15 +4,49 @@ ECS のサイドカー（Squid プロキシ）構成をローカルと CI でエ
 外部 API のエラー応答や遅延を含む E2E テストを実施する検証用の環境。
 
 ```text
-Test Client → Squid Proxy (127.0.0.1:3128) → WireMock (127.0.0.1:8080)
+Test Client → Squid Proxy (:3128) → WireMock (:8080)
 ```
 
 本番 ECS では awsvpc ネットワークモードでタスク内のコンテナが localhost を共有する。
-同じ構成を、pause コンテナと共有する namespace で再現し、クライアントのリトライやタイムアウトを確かめる。
+同じタスク定義を、ローカルと CI では ECS のエミュレータ（fakecloud）で `run-task` して動かし、
+クライアントのリトライやタイムアウトを確かめる。
+
+## 検証の範囲
+
+ローカルと CI は、完成版のタスク定義を ECS のエミュレータ（fakecloud）に登録し、`run-task` で1回だけ実行する。
+AWS の ECS を、タスクとして起動する形を検証する。
+
+| 項目 | 範囲 |
+| --- | --- |
+| 対象 | `register-task-definition` と `run-task`（タスクとしての起動） |
+| 対象外 | `create-service` などサービスとしての起動、ローリングデプロイ、Auto Scaling、ロードバランサー |
+| 対象外 | タスクが止まらないこと（Squid が `essential` のため。検証後は手動で止める） |
+| 対象外 | 同じタスクのコンテナが `127.0.0.1` を共有すること（fakecloud は共有しない。後述） |
+
+fakecloud は、同じタスクのコンテナを別々のネットワーク名前空間で起動する。
+このため、ローカルと CI では Client のプロキシの宛先を `127.0.0.1:3128` ではなく、
+Squid に付けた別名（`swsc-squid`）にする。AWS 用の完成版は `127.0.0.1:3128` のままで、差は環境変数の値だけにする。
+
+fakecloud は Docker のソケットを持ち、ホストの Docker を操作できる。ポートは `127.0.0.1` だけに公開する。
+CI は使い捨てのランナーで動かす。手元で使うときは、この点を理解したうえで実行する。
+fakecloud のライセンスは AGPL-3.0 で、社内のローカル開発と CI での利用を想定している。
+
+## 1回の Client 実行の流れ
+
+Client を1回実行するごとに、タスクを1つ起動する。
+
+1. スクリプトが、`run-task` でタスクを起動する（Client の環境変数は `overrides` で渡す）。
+2. fakecloud が、タスクごとに専用の Docker ネットワークを作り、Squid と Client のコンテナを起動する。
+3. スクリプトが、タスクのネットワークに WireMock を接続し、Squid に別名 `swsc-squid` を付ける。
+4. Client は、Squid が healthy になってから起動する（`dependsOn: HEALTHY`）。
+5. スクリプトが、Client の出力と終了コードを取り、タスクのコンテナとネットワークを消す。
+
+Squid を再起動した後の確認だけは、同じタスクのネットワークで Client を追加で実行する（ECS を通らない）。
 
 ## 構成図
 
-違いは WireMock の有無だけです。Client と Squid は、どの環境でも同じ2コンテナで、localhost を共有します。
+違いは WireMock の有無だけです。Client と Squid は、どの環境でも同じ2コンテナです。
+AWS 本番では localhost を共有します。ローカルと CI では、Squid の別名で届きます。
 
 ### 環境変数 `SQUID_UPSTREAM`
 
@@ -27,18 +61,20 @@ Squid の転送先は、環境変数 `SQUID_UPSTREAM` で切り替えます。
 
 ### ローカル
 
-自分の PC の Docker で動かします。pause コンテナが network namespace を持ち、Client と Squid が参加します。
-WireMock は別のコンテナで、同じ Docker ネットワークに置きます。
+自分の PC の Docker で動かします。fakecloud が、完成版のタスク定義を `run-task` で実行します。
+WireMock は、タスクの外のコンテナです。タスクごとに、そのネットワークへ接続します。
 
 ```mermaid
 flowchart LR
   subgraph Host["自分の PC (Docker)"]
-    subgraph NS["pause の namespace (localhost を共有)"]
-      Client["Client<br/>HTTP_PROXY=127.0.0.1:3128"]
+    FC["fakecloud<br/>(ECS のエミュレータ)"]
+    subgraph Task["ECS タスク (fakecloud が起動)"]
+      Client["Client<br/>HTTP_PROXY=swsc-squid:3128"]
       Squid["Squid :3128<br/>SQUID_UPSTREAM=mock"]
       Client -->|"api.example.com"| Squid
     end
-    WM["WireMock :8080"]
+    WM["WireMock :8080<br/>(タスクの外)"]
+    FC -.->|"run-task"| Task
     Squid -->|"転送"| WM
   end
 ```
@@ -51,12 +87,14 @@ flowchart LR
 ```mermaid
 flowchart LR
   subgraph Runner["GitHub Actions ランナー (ubuntu / Docker)"]
-    subgraph NS["pause の namespace (localhost を共有)"]
-      Client["Client<br/>HTTP_PROXY=127.0.0.1:3128"]
+    FC["fakecloud<br/>(ECS のエミュレータ)"]
+    subgraph Task["ECS タスク (fakecloud が起動)"]
+      Client["Client<br/>HTTP_PROXY=swsc-squid:3128"]
       Squid["Squid :3128<br/>SQUID_UPSTREAM=mock"]
       Client -->|"api.example.com"| Squid
     end
-    WM["WireMock :8080"]
+    WM["WireMock :8080<br/>(タスクの外)"]
+    FC -.->|"run-task"| Task
     Squid -->|"転送"| WM
   end
 ```
@@ -83,10 +121,11 @@ flowchart
 | | ローカル | CI | AWS 本番 |
 | --- | --- | --- | --- |
 | 動く場所 | 自分の PC の Docker | GitHub のランナーの Docker | ECS Fargate |
-| Client と Squid | pause の namespace を共有 | 同左 | `awsvpc` で localhost を共有 |
+| Client から Squid への宛先 | 別名 `swsc-squid:3128` | 同左 | `127.0.0.1:3128`（`awsvpc` で localhost を共有） |
+| タスクの起動 | fakecloud の `run-task` | 同左 | ECS の `run-task`（利用者が実行） |
 | WireMock | あり | あり | **なし** |
 | Squid の転送先 | WireMock (`mock`) | WireMock (`mock`) | 外部 API (`direct`) |
-| 起動する人 | 開発者 | ワークフロー | ECS |
+| 起動する人 | 開発者 | ワークフロー | 利用者 |
 
 ## ローカルでの実行とテスト
 
@@ -107,8 +146,8 @@ sh scripts/e2e.sh test:ci error-500-then-200                                 # 1
 1つずつ操作するとき:
 
 ```bash
-npm run start      # WireMock、pause、Squid を起動する
-npm run test       # Client を実行して検査する
+npm run start      # WireMock、レジストリ、fakecloud を起動し、タスク定義を登録する
+npm run test       # タスクを起動して Client を実行し、検査する
 npm run logs       # コンテナのログを表示する
 npm run stop       # 起動したコンテナとネットワークを削除する
 npm run clean      # stop に加えて生成物と収集ログを削除する
@@ -123,7 +162,8 @@ git ls-files -z '*.sh' | xargs -0 "$(mise which shellcheck)" -s sh -S style --
 npm run lint:md
 ```
 
-固定ポート（8080、3128）は入口のロックで1つの実行だけに限る。並列に実行しない。
+固定ポート（8080、14566、15000）は入口のロックで1つの実行だけに限る。並列に実行しない。
+14566 は fakecloud、15000 はイメージのレジストリで、どちらも `127.0.0.1` だけに公開する。
 
 ## AWS 本番へのデプロイ
 
@@ -131,14 +171,23 @@ npm run lint:md
 イメージの作成と ECR への push、ECS への登録は、利用者の環境で行う。
 
 1. 本番向けのタスク定義を作る。本番は `--profile production --upstream direct` だけを受け付ける（WireMock は指定できない）。
+   `--api-base-url` は、Client が叩く先（`TEST_API_BASE_URL`）で、本番では `https://` だけを受け付ける。
+   ログとロールの引数は省略できる。ログは `--log-group` と `--log-region` を一緒に指定する。
 
    ```bash
    python3 -B scripts/e2e-taskdef.py render \
      --template ecs/task-definition.template.json --out taskdef-production.json \
      --client-image <ECR のホスト>/<client のリポジトリ>:<タグ> \
      --squid-image <ECR のホスト>/<squid のリポジトリ>:<タグ> \
-     --profile production --upstream direct
+     --profile production --upstream direct \
+     --api-base-url https://httpbin.org \
+     --log-group <ロググループ名> --log-region <リージョン> \
+     --execution-role-arn <実行ロールの ARN> --task-role-arn <タスクロールの ARN>
    ```
+
+   叩く先の `httpbin.org` は、Squid の許可リスト（`squid-config/whitelist.txt`）に入れてある。
+   別のドメインを使うときは、許可リストへ足して Squid のイメージを作り直す。
+   `httpbin.org` については [テスト用 API の httpbin.org](docs/テスト用APIのhttpbin.md) を参照。
 
 2. 本番向けの条件を満たすか検査する。合格すると `OK: 本番向けの検査に合格` と出る。
 
@@ -153,7 +202,9 @@ npm run lint:md
    ```
 
 Squid のイメージは `ecs/squid/Dockerfile`、Client のイメージは `Dockerfile.test-client` から作る。
-タスク定義にはロールやログの設定が要る場合がある。登録前に、利用者の環境の要件に合わせて確かめる。
+HTTPS の通信は、Squid が `CONNECT` で中継する（中身は復号しない）。ローカルと CI は HTTP のまま WireMock を使う。
+AWS では、タスクのセキュリティグループで、送信の 443 を許可する。
+タスクは Client が終わっても止まらない（Squid が `essential` のため）。検証後は手動で止める。
 
 ## 構成
 

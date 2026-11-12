@@ -11,7 +11,8 @@ sh scripts/e2e.sh test:ci normal error-500-then-200 ratelimit-429 slow-5000   # 
 sh scripts/e2e.sh test:ci error-500-then-200                                    # 1シナリオだけ
 ```
 
-WireMock、pause、Squid を起動し、シナリオを実通信で直列に実行して、最後に止める（Docker を使う）。
+WireMock、レジストリ、fakecloud を起動し、シナリオを実通信で直列に実行して、最後に止める（Docker を使う）。
+シナリオごとに、`run-task` でタスクを1つ起動する（Squid は毎回、起動し直す）。
 名前は既定の順と違う順で指定してよい。実行は常に直列である。
 
 ### 終了コード
@@ -62,4 +63,4 @@ summary: PASS passed=4 failed=0 not_run=0 failed_scenarios=- elapsed=10s
 
 1台の WireMock に対して、シナリオを並列に実行しない。
 リセットと受信回数は同じジャーナルを共有するため、並列にすると互いの結果が混ざる。
-固定ポート 8080 と 3128 は、入口のロックで排他する。別のスタックが同じポートを使っているときは実行しない。
+固定ポート 8080、14566、15000 は、入口のロックで排他する。別のスタックが同じポートを使っているときは実行しない。

@@ -166,15 +166,16 @@ extra_checks() { # 名前 標準出力 標準エラー
 # ---- 実装: 外へ触る3点 ----
 
 # 1シナリオ分のクライアントを実行する。出力は出力先の out と err に分けて残す。
-# Why: 上書きの設定は -e で明示したものだけを渡す。ホストの環境変数は届かないため。
+# Why: 上書きの設定は run-task の overrides で明示したものだけを渡す。ホストの環境変数は届かないため。
 # Why: 新基盤の共通入口を使う。Squid の 3128 はホストへ公開しないので、要求は Client から送る。
+# 1回の実行ごとに、タスクを1つ起動する。
 run_client() { # パス 上書き設定（空可） 出力先
   _rc=0
   if [ -n "$2" ]; then
-    swsc_client_once_env "$SWSC_E2E_DIR/run" "$$" "$SWSC_SCENARIOS_CLIENT_URL" "$3/out" "$3/err" \
+    swsc_client_once_env "$SWSC_SCENARIOS_CLIENT_URL" "$3/out" "$3/err" \
       "TEST_API_PATH=$1" "$2" || _rc=$?
   else
-    swsc_client_once_env "$SWSC_E2E_DIR/run" "$$" "$SWSC_SCENARIOS_CLIENT_URL" "$3/out" "$3/err" \
+    swsc_client_once_env "$SWSC_SCENARIOS_CLIENT_URL" "$3/out" "$3/err" \
       "TEST_API_PATH=$1" || _rc=$?
   fi
   return "$_rc"
@@ -336,16 +337,17 @@ smoke_started=0
 # 起動の後、Client が送る先（Squid の 3128 を通る要求の宛先）。
 SWSC_SCENARIOS_CLIENT_URL=http://api.example.com
 
-# 起動し、WireMock の管理APIが応答するまで待つ。Squid の待ち受けは swsc_start_main が確かめる。
-# Why: ホストから 3128 へ要求を送らない。Squid 経由の準備の確認は、最初の Client の実行で見える。
+# 起動し、WireMock の管理APIが応答するまで待つ。エミュレータとレジストリの待機は swsc_start_main が行う。
+# Why: ホストから Squid へ要求を送らない。Squid 経由の確認は、Client の実行で見える。
 smoke_up() {
   smoke_started=0
   if ! swsc_stop; then
     printf 'FAIL: 既存の swsc- の停止に失敗した\n' >&2
     return 1
   fi
-  if ! swsc_check_ports_free "$SWSC_MOCK_PORT" "$SWSC_SQUID_PORT"; then
-    printf 'FAIL: ポート 3128 か 8080 が使用中のため起動しない\n' >&2
+  if ! swsc_check_ports_free "$SWSC_MOCK_PORT" "$SWSC_FAKECLOUD_PORT" "$SWSC_REGISTRY_PORT"; then
+    printf 'FAIL: ポート %s、%s、%s のどれかが使用中のため起動しない\n' \
+      "$SWSC_MOCK_PORT" "$SWSC_FAKECLOUD_PORT" "$SWSC_REGISTRY_PORT" >&2
     return 1
   fi
   # Why: 空きを確かめた直後に立てる（移行前と同じ）。swsc_start_main は WireMock を Squid より先に起動するため、

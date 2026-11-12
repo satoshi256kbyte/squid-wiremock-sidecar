@@ -4,12 +4,20 @@
 # 名前と版の定数。Why: 版を1か所に置き、文書と検査が同じ値を見るため（NFR-909）。
 SWSC_PREFIX=swsc-
 SWSC_LABEL=swsc.managed=true
-# shellcheck disable=SC2034 # scripts/e2e-runner.sh が $SWSC_NET を使う（ネットワーク作成と接続）
-SWSC_NET=swsc-net
-# shellcheck disable=SC2034 # scripts/e2e-runner.sh が $SWSC_PAUSE_IMAGE を使う（pause 共有 namespace）
-SWSC_PAUSE_IMAGE=alpine:3.20
 # shellcheck disable=SC2034 # scripts/e2e-runner.sh が $SWSC_WIREMOCK_IMAGE を使う（WireMock の起動）
 SWSC_WIREMOCK_IMAGE=wiremock/wiremock:3.13.1
+# ECS のエミュレータとイメージのレジストリ。Why: 版とダイジェストで固定する。タグは付け替えられるため、
+# 取得物が変わらないようにする（fakecloud は Docker のソケットを持つので、取得物の同一性が特に重要）。
+# shellcheck disable=SC2034 # scripts/e2e-runner.sh が使う
+SWSC_FAKECLOUD_IMAGE=ghcr.io/faiscadev/fakecloud:0.51.0@sha256:6242e3b38c7a8dfb6bbfa2b682b0f5fe4f4b2ea8f465128f0f871a2738a65800
+# shellcheck disable=SC2034 # scripts/e2e-runner.sh が使う
+SWSC_REGISTRY_IMAGE=registry:2.8.3@sha256:a3d8aaa63ed8681a604f1dea0aa03f100d5895b6a58ace528858a7b332415373
+# Why: 127.0.0.1 だけに公開する。エミュレータは Docker のソケットを持つため、他のホストに見せない。
+SWSC_FAKECLOUD_PORT=14566
+SWSC_REGISTRY_PORT=15000
+# shellcheck disable=SC2034 # scripts/e2e-runner.sh が使う
+SWSC_FAKECLOUD_URL=http://127.0.0.1:$SWSC_FAKECLOUD_PORT
+SWSC_REGISTRY_HOST=localhost:$SWSC_REGISTRY_PORT
 # Why: 出力先を既定の .e2e から変えられるようにする。検査の unit が一時領域へ向けるため。
 : "${SWSC_E2E_DIR:=${SWSC_ROOT:-}/.e2e}"
 # 収集したログの出力先（FR-921）。unit が一時領域へ向けられるように、既定の場所だけを変数に置く。
@@ -20,13 +28,16 @@ SWSC_ID_RE='arn:aws|(^|[^0-9A-Za-z-])[0-9]{12}([^0-9A-Za-z-]|$)'
 # ディレクトリを削除や書き換えしないため（security-review の Low）。
 SWSC_DIR_MARKER=.swsc-managed
 SWSC_MOCK_PORT=8080
-# Squid が Client から使うプロキシの待ち受け。start の前に空きを確かめる（T2603）。
-SWSC_SQUID_PORT=3128
-# 手元の起動（start）で使う完成版の入力。
-SWSC_LOCAL_CLIENT_IMAGE=swsc-client:e2e
-SWSC_LOCAL_SQUID_IMAGE=swsc-squid:e2e
+# 手元の起動（start）で使う完成版の入力。イメージは、ビルドの名前（:e2e）と、レジストリ経由の参照の2つを持つ。
+SWSC_LOCAL_CLIENT_NAME=swsc-client
+SWSC_LOCAL_SQUID_NAME=swsc-squid
+SWSC_LOCAL_CLIENT_IMAGE=$SWSC_LOCAL_CLIENT_NAME:e2e
+SWSC_LOCAL_SQUID_IMAGE=$SWSC_LOCAL_SQUID_NAME:e2e
 SWSC_LOCAL_MOCK_HOST=swsc-wiremock
 SWSC_LOCAL_MOCK_PORT=8080
+# Client のプロキシ。Why: エミュレータは同じタスクの 127.0.0.1 を共有しないため、Squid の別名へ向ける。
+# shellcheck disable=SC2034 # scripts/e2e-runner.sh が使う
+SWSC_LOCAL_PROXY_URL=http://swsc-squid:3128
 
 # 必要なコマンドがあるかを検査する。原因を標準エラーに示す。
 swsc_need_cmd() { # コマンド名
@@ -71,9 +82,10 @@ swsc_prepare_dir() { # ディレクトリ
   : >"$1/$SWSC_DIR_MARKER"
 }
 
-# 手元の起動の完成版を作る。
+# 手元の起動の完成版を作る。イメージは、レジストリ経由の参照にする。
 swsc_render_local() { # 出力先
-  swsc_render "$1" "$SWSC_LOCAL_CLIENT_IMAGE" "$SWSC_LOCAL_SQUID_IMAGE" local mock "$SWSC_LOCAL_MOCK_HOST" "$SWSC_LOCAL_MOCK_PORT"
+  swsc_render "$1" "$SWSC_REGISTRY_HOST/$SWSC_LOCAL_CLIENT_IMAGE" "$SWSC_REGISTRY_HOST/$SWSC_LOCAL_SQUID_IMAGE" \
+    local mock "$SWSC_LOCAL_MOCK_HOST" "$SWSC_LOCAL_MOCK_PORT" "$SWSC_LOCAL_PROXY_URL"
 }
 
 # 127.0.0.1 のポートが応答するか（使用中か）を返す。応答すれば 0、無ければ 1。
@@ -105,15 +117,16 @@ swsc_mask() {
 
 # 完成版のタスク定義を作る唯一の経路。
 # Why: 登録用と起動用で生成手順を分けると、比較の前提が崩れるため（FR-903）。
-swsc_render() { # 出力先 クライアントイメージ Squidイメージ プロファイル 上流 [mockホスト mockポート]
-  # Why: 生成の呼び出しを1か所にまとめる。mock の宛先が無いときは空文字で渡し、
+swsc_render() { # 出力先 クライアントイメージ Squidイメージ プロファイル 上流 [mockホスト mockポート プロキシURL]
+  # Why: 生成の呼び出しを1か所にまとめる。mock の宛先とプロキシが無いときは空文字で渡し、
   # 引数の数で呼び分けない（空白の混ざった値で引数が増えるのを防ぐため、展開を使わない）。
   _mock_host=${6:-}
   _mock_port=${7:-}
+  _proxy_url=${8:-}
   python3 -B "$SWSC_ROOT/scripts/e2e-taskdef.py" render \
     --template "$SWSC_ROOT/ecs/task-definition.template.json" --out "$1" \
     --client-image "$2" --squid-image "$3" --profile "$4" --upstream "$5" \
-    --mock-host "$_mock_host" --mock-port "$_mock_port"
+    --mock-host "$_mock_host" --mock-port "$_mock_port" --proxy-url "$_proxy_url"
 }
 
 # Squid のビルド文脈を作る。Dockerfile が COPY する名前に揃える。
@@ -194,9 +207,11 @@ print(count)
 # 偽の関数で差し替えて確かめられるようにするため。
 # ---------------------------------------------------------------------------
 
-# 指定の名前のコンテナが動いているか（Squid の稼働の確認）。
-swsc_squid_running() {
-  [ "$(docker inspect --format '{{.State.Running}}' "${SWSC_PREFIX}squid" 2>/dev/null || true)" = true ]
+# 基盤（エミュレータ、WireMock、レジストリ）が動いているか。
+swsc_infra_running() {
+  for _n in fakecloud wiremock registry; do
+    [ "$(docker inspect --format '{{.State.Running}}' "${SWSC_PREFIX}${_n}" 2>/dev/null || true)" = true ] || return 1
+  done
 }
 
 # 手元の起動で、ビルドしたイメージを作る。Why: 文脈は必要なファイルだけを写し、リポジトリ全体を送らないため。
@@ -222,9 +237,9 @@ swsc_start_main() {
     return 1
   }
   # Why: 占有者の名前では判定しない。プロジェクト名は任意で、旧基盤の名前を当てにできないため。
-  # Why: 使う2つのポートを、停止の後に確かめる。自分の残りを使用中と誤認しないため。
-  if ! swsc_check_ports_free "$SWSC_MOCK_PORT" "$SWSC_SQUID_PORT"; then
-    printf 'FAIL: 使用中のポートがある（swsc- 以外のコンテナかプロセス。旧基盤の可能性がある）\n' >&2
+  # Why: 使う3つのポートを、停止の後に確かめる。自分の残りを使用中と誤認しないため。
+  if ! swsc_check_ports_free "$SWSC_MOCK_PORT" "$SWSC_FAKECLOUD_PORT" "$SWSC_REGISTRY_PORT"; then
+    printf 'FAIL: 使用中のポートがある（swsc- 以外のコンテナかプロセス）\n' >&2
     return 1
   fi
   # Why: build_images が出力先の中を作り直す（rm -r）ため、その前に自分のディレクトリか確かめる。
@@ -238,10 +253,9 @@ swsc_start_main() {
     printf 'FAIL: 完成版の生成に失敗した\n' >&2
     return 1
   }
-  # Why: 前の実行の起動情報を残すと、test が古い Client の引数を拾うため、作り直す。
+  # Why: 前の実行のタスクの記録とログを残すと、collect が古い実行のログを混ぜるため、作り直す。
   if [ -d "$SWSC_E2E_DIR/run" ]; then rm -r -- "$SWSC_E2E_DIR/run" || return 1; fi
-  # Why: 実行IDは PID にする。Client の名前が、同じホストの別の実行と衝突しないため。
-  swsc_runner_start_all "$SWSC_E2E_DIR/run" "$SWSC_E2E_DIR/taskdef.json" "$$"
+  swsc_runner_start_all "$SWSC_E2E_DIR/taskdef.json"
 }
 
 # start 操作（単独）。失敗時だけ stop を呼ぶ。Why: 成功時は環境を残して調べられるようにするため。
@@ -261,57 +275,22 @@ swsc_start_op() {
   return "$_rc"
 }
 
-# 1回の要求で Client を1回起動する。上書きの URL は -e で渡す（env-file より優先される）。
-# 追加の NAME=VALUE（省略可）も -e で渡す。Why: 呼び出し側が環境変数を足せるよう、既存の3引数の形を残したまま拡張するため。
-# Why: 引数の組み立ては run の .args に任せ、ここでは上書きだけを足す。
-swsc_client_once() { # 実行ディレクトリ 実行ID ベースURL [NAME=VALUE...]
-  _file=$1/swsc-client-$2.args
-  _id=$2
-  # Why: set -- が位置パラメータを入れ替えるため、ベースURLは先に別の変数へ退避する。
-  # Why not: $3 を後から参照する形は採らない。入れ替え後の値（--label）が URL になり、Squid が全て拒否する（実機で確認）。
-  _base_url=$3
-  shift 3
-  if [ ! -f "$_file" ]; then
-    printf 'FAIL: 引数のファイルが無い: swsc-client-%s\n' "$_id" >&2
-    return 1
-  fi
-  # Why: -e は、.args のイメージ名より前に並ぶ必要がある。追加分を先に -e の組へ直してから、.args の行を後ろへ足す。
-  # Why not: docker run の後ろに置く。イメージより後ろの語は Client のコマンドの引数になるため。
-  _n=$#
-  while [ "$_n" -gt 0 ]; do
-    _kv=$1
-    shift
-    set -- "$@" -e "$_kv"
-    _n=$((_n - 1))
-  done
-  set -- "$@" -e "TEST_API_BASE_URL=$_base_url"
-  while IFS= read -r _line || [ -n "$_line" ]; do
-    set -- "$@" "$_line"
-  done <"$_file"
-  docker run --rm "$@"
-}
-
-# Client を1回起動し、標準出力と標準エラーをファイルへ分けて保存する。終了コードは Client のものをそのまま返す。
-# 引数や前提が足りないときは、docker を呼ばずに 2 を返す。
+# Client を1回実行する。タスクを1つ起動し、Client の終了を待って、標準出力と標準エラーを保存する。
+# 終了コードは Client のものをそのまま返す。環境変数の上書きは run-task の overrides で渡す。
+# 引数や前提が足りないときは、タスクを起動せずに 2 を返す。
 # Why: 環境変数の名前と値は、実行の前に全部検査する。途中の不正で一部だけ実行されると、結果の解釈が難しくなるため。
 # Why not: 値をシェル文字列へ連結する。記号や空白を含む値が、コマンドとして解釈されるのを避けるため。
-swsc_client_once_env() { # 実行ディレクトリ 実行ID ベースURL 標準出力の保存先 標準エラーの保存先 [NAME=VALUE...]
-  if [ "$#" -lt 5 ]; then
-    printf 'FAIL: 引数が足りない（実行ディレクトリ、実行ID、ベースURL、標準出力の保存先、標準エラーの保存先）\n' >&2
+swsc_client_once_env() { # ベースURL 標準出力の保存先 標準エラーの保存先 [NAME=VALUE...]
+  if [ "$#" -lt 3 ]; then
+    printf 'FAIL: 引数が足りない（ベースURL、標準出力の保存先、標準エラーの保存先）\n' >&2
     return 2
   fi
-  _env_run=$1
-  _env_id=$2
-  _env_url=$3
-  _env_out=$4
-  _env_err=$5
-  shift 5
+  _env_url=$1
+  _env_out=$2
+  _env_err=$3
+  shift 3
   if [ -z "$_env_out" ] || [ -z "$_env_err" ]; then
     printf 'FAIL: 標準出力と標準エラーの保存先を指定する\n' >&2
-    return 2
-  fi
-  if [ ! -f "$_env_run/swsc-client-$_env_id.args" ]; then
-    printf 'FAIL: 起動情報が無い: swsc-client-%s\n' "$_env_id" >&2
     return 2
   fi
   # Why: 改行の判定に使う。case のパターンへ直接書くと、改行の扱いが読みにくくなるため。
@@ -333,7 +312,7 @@ swsc_client_once_env() { # 実行ディレクトリ 実行ID ベースURL 標準
         ;;
     esac
     _name=${_kv%%=*}
-    # Why: 名前が数字で始まる、または記号を含むと、docker run が環境変数として受け付けないため。
+    # Why: 名前が数字で始まる、または記号を含むと、環境変数として受け付けないため。
     case $_name in
       '' | [0-9]* | *[!A-Za-z0-9_]*)
         printf 'FAIL: 環境変数の名前が不正（英字かアンダースコアで始まる英数字とアンダースコアだけ）\n' >&2
@@ -342,7 +321,7 @@ swsc_client_once_env() { # 実行ディレクトリ 実行ID ベースURL 標準
     esac
   done
   _rc=0
-  swsc_client_once "$_env_run" "$_env_id" "$_env_url" "$@" >"$_env_out" 2>"$_env_err" || _rc=$?
+  swsc_task_run_client "$_env_out" "$_env_err" "TEST_API_BASE_URL=$_env_url" "$@" || _rc=$?
   return "$_rc"
 }
 
@@ -355,68 +334,87 @@ swsc_wiremock_reset() {
 }
 
 # 検査の1件。状態（終了コード、CLIENT_STATUS、/api/ の受信数）が期待どおりなら PASS。
-swsc_test_item() { # 番号 名前 ベースURL 期待のステータス 期待の受信数 実行ディレクトリ 実行ID
+swsc_test_item() { # 番号 名前 ベースURL 期待のステータス 期待の受信数
   swsc_wiremock_reset || {
     printf 'FAIL: %s %s: WireMock の受信記録を空にできない\n' "$1" "$2"
     return 1
   }
   _crc=0
-  _out=$(swsc_client_once "$6" "$7" "$3") || _crc=$?
-  _status=$(printf '%s\n' "$_out" | sed -n 's/^CLIENT_STATUS=//p' | head -n 1)
+  _tout=$(mktemp "${KIROCREW_SCRATCH:-${TMPDIR:-/tmp}}/swsc-item.XXXXXX") || return 1
+  swsc_client_once_env "$3" "$_tout" /dev/null || _crc=$?
+  _out=$(cat "$_tout")
+  rm -f "$_tout"
+  swsc_test_item_judge "$1" "$2" "$_crc" "$_out" "$4" "$5"
+}
+
+# 検査の判定。Client の終了コード、出力、WireMock の受信数を期待と比べる。
+swsc_test_item_judge() { # 番号 名前 Client終了コード Client出力 期待のステータス 期待の受信数
+  _status=$(printf '%s\n' "$4" | sed -n 's/^CLIENT_STATUS=//p' | head -n 1)
   _total=$(swsc_wiremock_total) || _total=unknown
-  if [ "$_crc" -eq 0 ] && [ "$_status" = "$4" ] && [ "$_total" = "$5" ]; then
+  if [ "$3" -eq 0 ] && [ "$_status" = "$5" ] && [ "$_total" = "$6" ]; then
     printf 'PASS: %s %s（CLIENT_STATUS=%s、受信数=%s）\n' "$1" "$2" "$_status" "$_total"
     return 0
   fi
   printf 'FAIL: %s %s（CLIENT_STATUS=%s 期待 %s、受信数=%s 期待 %s、Client終了コード=%s）\n' \
-    "$1" "$2" "$_status" "$4" "$_total" "$5" "$_crc"
+    "$1" "$2" "$_status" "$5" "$_total" "$6" "$3"
   return 1
 }
 
-# Squid を再起動し、healthy になるまで待つ（FR-907の3項目め）。
-swsc_test_restart_squid() {
-  docker restart "${SWSC_PREFIX}squid" >/dev/null || return 1
-  swsc_runner_wait_healthy "${SWSC_PREFIX}squid"
+# Squid の再起動後も通ることを確かめる（FR-907の3項目め）。
+# タスクを起動して Squid を再起動し、同じタスクのネットワークで Client を追加で実行する。
+# Why: タスクの Client は1回で終わるため、再起動後の要求は追加の Client で送る。ECS を通らないのは、この1件だけ。
+swsc_test_restart_item() { # 番号 名前 ベースURL 期待のステータス 期待の受信数
+  swsc_task_begin /dev/null /dev/null "TEST_API_BASE_URL=$3" || {
+    swsc_task_cleanup_current
+    printf 'FAIL: %s %s: タスクを起動できない\n' "$1" "$2"
+    return 1
+  }
+  _tid=$SWSC_TASK_ID
+  if ! docker restart "$_tid-squid" >/dev/null || ! swsc_runner_wait_healthy "$_tid-squid"; then
+    swsc_task_cleanup_current
+    printf 'FAIL: %s %s: Squid が再起動後に healthy にならない\n' "$1" "$2"
+    return 1
+  fi
+  swsc_wiremock_reset || {
+    swsc_task_cleanup_current
+    printf 'FAIL: %s %s: WireMock の受信記録を空にできない\n' "$1" "$2"
+    return 1
+  }
+  _crc=0
+  _tout=$(mktemp "${KIROCREW_SCRATCH:-${TMPDIR:-/tmp}}/swsc-item.XXXXXX") || return 1
+  swsc_task_extra_client "$_tid" "$_tout" /dev/null "$3" || _crc=$?
+  _out=$(cat "$_tout")
+  rm -f "$_tout"
+  swsc_task_cleanup_current
+  swsc_test_item_judge "$1" "$2" "$_crc" "$_out" "$4" "$5"
+}
+
+# 直前に起動したタスクのログを残して消す。失敗は無視する（検査の結果を変えない）。
+swsc_task_cleanup_current() {
+  if [ -n "${SWSC_TASK_ID:-}" ]; then
+    swsc_task_save_logs "$SWSC_TASK_ID" || true
+    swsc_task_teardown "$SWSC_TASK_ID" || true
+  fi
 }
 
 # FR-907 の3項目。1項目でも失敗すれば、全体は失敗する。
-swsc_test_body() { # 実行ディレクトリ 実行ID
+swsc_test_body() {
   _all=0
-  swsc_test_item 1 許可ドメイン http://api.example.com 200 1 "$1" "$2" || _all=1
-  swsc_test_item 2 許可外ドメイン http://blocked.example.net 403 0 "$1" "$2" || _all=1
-  if swsc_test_restart_squid; then
-    swsc_test_item 3 Squid再起動後 http://api.example.com 200 1 "$1" "$2" || _all=1
-  else
-    printf 'FAIL: 3 Squid再起動後: Squid が再起動後に healthy にならない\n'
-    _all=1
-  fi
+  swsc_test_item 1 許可ドメイン http://api.example.com 200 1 || _all=1
+  swsc_test_item 2 許可外ドメイン http://blocked.example.net 403 0 || _all=1
+  swsc_test_restart_item 3 Squid再起動後 http://api.example.com 200 1 || _all=1
   return "$_all"
 }
 
 # 通信検証（test）。出力は一度ファイルへ書き、終了コードを取ってから表示する（終了コードを保つため）。
 swsc_test_run() {
   swsc_prepare_dir "$SWSC_LOG_DIR" || return 1
-  if ! swsc_squid_running; then
-    printf 'FAIL: Squid が稼働していない。先に start を実行する\n' >&2
+  if ! swsc_infra_running; then
+    printf 'FAIL: 基盤（エミュレータ、WireMock、レジストリ）が稼働していない。先に start を実行する\n' >&2
     return 1
   fi
-  _dir=$SWSC_E2E_DIR/run
-  _args=
-  for _f in "$_dir"/swsc-client-*.args; do
-    if [ -e "$_f" ]; then
-      _args=$_f
-      break
-    fi
-  done
-  if [ -z "$_args" ]; then
-    printf 'FAIL: 起動情報が無い。先に start を実行する\n' >&2
-    return 1
-  fi
-  _id=${_args##*/swsc-client-}
-  _id=${_id%.args}
-  swsc_runner_wait_healthy "${SWSC_PREFIX}squid" || return 1
   _rc=0
-  swsc_test_body "$_dir" "$_id" >"$SWSC_LOG_DIR/test.out" 2>"$SWSC_LOG_DIR/test.err" || _rc=$?
+  swsc_test_body >"$SWSC_LOG_DIR/test.out" 2>"$SWSC_LOG_DIR/test.err" || _rc=$?
   cat "$SWSC_LOG_DIR/test.out"
   cat "$SWSC_LOG_DIR/test.err" >&2
   return "$_rc"
@@ -571,7 +569,8 @@ swsc_remove_dir() {
 # Why not 他のイメージ: alpine や wiremock は他のプロジェクトも使うため、消さない（6.1）。
 swsc_clean() {
   swsc_stop || return 1
-  for _i in "$SWSC_LOCAL_CLIENT_IMAGE" "$SWSC_LOCAL_SQUID_IMAGE"; do
+  for _i in "$SWSC_LOCAL_CLIENT_IMAGE" "$SWSC_LOCAL_SQUID_IMAGE" \
+    "$SWSC_REGISTRY_HOST/$SWSC_LOCAL_CLIENT_IMAGE" "$SWSC_REGISTRY_HOST/$SWSC_LOCAL_SQUID_IMAGE"; do
     docker image rm "$_i" >/dev/null 2>&1 || true
   done
   # Why: 片方が拒否されても、もう片方は消す。終了コードで拒否を伝える。
@@ -582,21 +581,22 @@ swsc_clean() {
 }
 
 # 名前を指定したコンテナのログを表示する。名前は3つに限り、残りの引数は docker logs へ渡す。
+# Squid と Client のログは、タスクごとに作り直されるため、collect が集めたファイルで読む。
 swsc_logs() {
   case ${1:-} in
     '')
-      for _n in squid wiremock pause; do
+      for _n in fakecloud wiremock registry; do
         printf '== %s\n' "$_n"
         docker logs "${SWSC_PREFIX}${_n}" 2>&1 || true
       done
       ;;
-    squid | wiremock | pause)
+    fakecloud | wiremock | registry)
       _n=$1
       shift
       docker logs "$@" "${SWSC_PREFIX}${_n}"
       ;;
     *)
-      printf 'FAIL: logs の名前は squid、wiremock、pause のどれか\n' >&2
+      printf 'FAIL: logs の名前は fakecloud、wiremock、registry のどれか\n' >&2
       return 2
       ;;
   esac
@@ -636,7 +636,7 @@ swsc_collect_env() {
     # Why: 派生イメージの Id だけでは、基底の ubuntu/squid:latest がどの版だったかを後から特定できない（レビュー M-3）。
     printf 'base ubuntu/squid:latest: %s\n' \
       "$(docker image inspect --format '{{index .RepoDigests 0}}' ubuntu/squid:latest 2>/dev/null || echo 取得不可)"
-    for _n in squid wiremock; do
+    for _n in fakecloud registry wiremock; do
       docker inspect --format 'name={{.Name}} image={{.Config.Image}} id={{.Image}}' "${SWSC_PREFIX}${_n}" \
         2>/dev/null || true
     done
@@ -683,11 +683,14 @@ swsc_collect() {
   swsc_prepare_dir "$SWSC_LOG_DIR" || return 1
   mkdir -p "$SWSC_LOG_DIR/containers" "$SWSC_LOG_DIR/squid" || return 1
   : >"$SWSC_LOG_DIR/scrub.txt" || return 1
-  for _n in squid wiremock; do
+  for _n in fakecloud registry wiremock; do
     swsc_collect_from_command "containers/${SWSC_PREFIX}${_n}.log" docker logs "${SWSC_PREFIX}${_n}"
   done
-  swsc_collect_from_command squid/access.log docker exec "${SWSC_PREFIX}squid" cat /var/log/squid/access.log
-  swsc_collect_from_command squid/cache.log docker exec "${SWSC_PREFIX}squid" cat /var/log/squid/cache.log
+  # Why: Squid と Client はタスクごとに消えるため、タスクを消す前に実行ディレクトリへ残したログを写す。
+  swsc_collect_copy squid/access.log "$SWSC_E2E_DIR/run/squid-access.log"
+  swsc_collect_copy squid/cache.log "$SWSC_E2E_DIR/run/squid-cache.log"
+  swsc_collect_copy containers/squid.log "$SWSC_E2E_DIR/run/containers-squid.log"
+  swsc_collect_copy containers/client.log "$SWSC_E2E_DIR/run/containers-client.log"
   swsc_collect_copy taskdef.json "$SWSC_E2E_DIR/taskdef.json"
   for _f in test.out test.err; do
     if [ ! -f "$SWSC_LOG_DIR/$_f" ]; then printf '%s\n' "$_f" >>"$SWSC_LOG_DIR/missing.txt"; fi
@@ -700,7 +703,7 @@ swsc_collect() {
   return 0
 }
 
-# T2601: 固定ポート（8080、3128）を、同時に1つの実行だけが使うためのロック。
+# T2601: 固定ポート（8080、14566、15000）を、同時に1つの実行だけが使うためのロック。
 # Why: ホスト全体の資源なので、並列の実行が互いのポートを壊さないようにするため。
 # Why not: $TMPDIR に置く。プロセスや端末ごとに異なり、別のシェル間で排他が効かないため。
 # Why not: 古いロックの自動削除。実行中の他者のロックを壊すため。利用者が確かめてから手動で消す。
@@ -795,45 +798,6 @@ swsc_check_ports_free() { # ポート番号...
   for _p in "$@"; do
     if swsc_port_in_use "$_p"; then
       printf 'FAIL: ポート %s は使用中\n' "$_p" >&2
-      _rc=1
-    fi
-  done
-  return "$_rc"
-}
-
-# Squid の access log に、指定した各文字列が含まれれば0。1つでも無ければ1。
-# Why: grep -F で固定文字列として探す。パターンをシェルや sh -c に渡すと、* や $( ) が評価されるため。
-# Why: 不一致と取得失敗を別の文言にする。前者は検査の結果、後者は環境の問題で、利用者の対処が違うため。
-# Why: access log のパスは squid-config/squid.conf の access_log 行（/var/log/squid/access.log）と同じ値にする。
-# Why not: 既定のパスを推測する。設定ファイルと違う場所を読むと、空や古い記録で誤って通るため。
-swsc_squid_log_check() { # パターン...
-  if [ "$#" -eq 0 ]; then
-    printf 'FAIL: 検査するパターンを1つ以上指定する\n' >&2
-    return 1
-  fi
-  # Why: 改行を含むパターンは grep -F が複数のパターンとして扱うため、一致の意味が変わる。拒否する。
-  _nl=$(printf '\n_')
-  _nl=${_nl%_}
-  for _p in "$@"; do
-    case $_p in
-      '')
-        printf 'FAIL: 空のパターンは指定できない\n' >&2
-        return 1
-        ;;
-      *"$_nl"*)
-        printf 'FAIL: 改行を含むパターンは指定できない\n' >&2
-        return 1
-        ;;
-    esac
-  done
-  _log=$(docker exec "${SWSC_PREFIX}squid" cat /var/log/squid/access.log) || {
-    printf 'FAIL: Squid の access log を取得できない（docker exec の失敗）\n' >&2
-    return 1
-  }
-  _rc=0
-  for _p in "$@"; do
-    if ! printf '%s\n' "$_log" | grep -Fq -- "$_p"; then
-      printf 'FAIL: Squid の access log に一致しない: %s\n' "$_p" >&2
       _rc=1
     fi
   done
