@@ -17,7 +17,7 @@ resolve_tool() {
   _rt_arg=$3
 
   if ! command -v mise >/dev/null 2>&1; then
-    printf 'FAILED: miseが未導入。miseを導入し、mise install --lockedを実行する（docs/ローカル実行とCI.md）\n' >&2
+    printf 'FAILED: miseが未導入。miseを導入し、mise install --lockedを実行する（docs/テスト方式.md）\n' >&2
     return 1
   fi
   if ! _rt_expected=$(MISE_EXEC_AUTO_INSTALL=false MISE_AUTO_INSTALL=false MISE_LOCKED=1 mise current "$_rt_name" 2>/dev/null) \
