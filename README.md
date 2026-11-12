@@ -97,7 +97,23 @@ flowchart LR
 | Squid の転送先 | WireMock (`mock`) | WireMock (`mock`) | 外部 API (`direct`) |
 | 起動する人 | 開発者 | ワークフロー | ECS |
 
-## 使い方
+## ローカルでの実行とテスト
+
+初回だけ、検査ツール（shellcheck、actionlint、gitleaks、jq）を固定版で入れる。
+
+```bash
+mise install --locked
+```
+
+E2E（Docker を使う。CI と同じ内容）:
+
+```bash
+npm run test:ci                                                              # 起動、検査、収集、停止を続けて実行する
+sh scripts/e2e.sh test:ci normal error-500-then-200 ratelimit-429 slow-5000  # 4シナリオ
+sh scripts/e2e.sh test:ci error-500-then-200                                 # 1シナリオだけ
+```
+
+1つずつ操作するとき:
 
 ```bash
 npm run start      # WireMock、pause、Squid を起動する
@@ -105,11 +121,48 @@ npm run test       # Client を実行して検査する
 npm run logs       # コンテナのログを表示する
 npm run stop       # 起動したコンテナとネットワークを削除する
 npm run clean      # stop に加えて生成物と収集ログを削除する
-npm run test:ci    # start、test、collect、stop を続けて実行する
-sh scripts/e2e.sh test:ci normal error-500-then-200 ratelimit-429 slow-5000  # 4シナリオ（CI と同じ）
+```
+
+コミット前の検査（ツールを直接実行する）:
+
+```bash
+git ls-files -z '*.sh' | xargs -0 "$(mise which shellcheck)" -s sh -S style --
+"$(mise which actionlint)" -shellcheck "$(mise which shellcheck)" .github/workflows/e2e-test.yml
+"$(mise which gitleaks)" dir . --config .gitleaks.toml --redact --no-banner --exit-code 1
+npm run lint:md
 ```
 
 固定ポート（8080、3128）は入口のロックで1つの実行だけに限る。並列に実行しない。
+
+## AWS 本番へのデプロイ
+
+このリポジトリは、デプロイそのものを実行しない。本番向けのタスク定義を作り、検査するところまでを行う。
+イメージの作成と ECR への push、ECS への登録は、利用者の環境で行う。
+
+1. 本番向けのタスク定義を作る。本番は `--profile production --upstream direct` だけを受け付ける（WireMock は指定できない）。
+
+   ```bash
+   python3 -B scripts/e2e-taskdef.py render \
+     --template ecs/task-definition.template.json --out taskdef-production.json \
+     --client-image <ECR のホスト>/<client のリポジトリ>:<タグ> \
+     --squid-image <ECR のホスト>/<squid のリポジトリ>:<タグ> \
+     --profile production --upstream direct
+   ```
+
+2. 本番向けの条件を満たすか検査する。合格すると `OK: 本番向けの検査に合格` と出る。
+
+   ```bash
+   sh scripts/e2e.sh check-production taskdef-production.json
+   ```
+
+3. 検査を通ったファイルを、ECS に登録する（このリポジトリは実行しない。例）。
+
+   ```bash
+   aws ecs register-task-definition --cli-input-json file://taskdef-production.json
+   ```
+
+Squid のイメージは `ecs/squid/Dockerfile`、Client のイメージは `Dockerfile.test-client` から作る。
+タスク定義にはロールやログの設定が要る場合がある。登録前に、利用者の環境の要件に合わせて確かめる。
 
 ## 構成
 
