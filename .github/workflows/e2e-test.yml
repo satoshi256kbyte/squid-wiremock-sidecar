@@ -45,6 +45,22 @@ jobs:
       - name: gitleaks
         run: '"$(MISE_EXEC_AUTO_INSTALL=false MISE_AUTO_INSTALL=false mise which gitleaks)" dir . --config .gitleaks.toml --redact --no-banner --exit-code 1'
         timeout-minutes: 2
+      # Why: AWS 用のタスク定義は CDK が雛形から作る。CI は AWS に接続せず、synth の出力が render の本番用の出力と
+      # 一致すること（タスク定義の一本化。R16、R17）だけを確かめる。デプロイは行わない。
+      # Why: アクションはコミット SHA で固定する。
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 22
+      # Why: インストールスクリプトは実行しない。取得した依存パッケージのスクリプトを、CI で動かさないため。
+      - name: cdk-install
+        run: npm ci --prefix cdk --ignore-scripts
+        timeout-minutes: 3
+      - name: cdk-synth
+        run: npm run synth --prefix cdk
+        timeout-minutes: 3
+      - name: check-cdk
+        run: sh scripts/e2e.sh check-cdk
+        timeout-minutes: 1
       # 起動を含むため10分まで（Q-906）。
       # 4シナリオは、専用の step を作らず、同じ test-ci の検査列へ直列で足す（ローカルの test:ci と同じ順序）。
       - name: test-ci

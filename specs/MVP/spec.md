@@ -77,6 +77,75 @@ R12 で Squid を公開しないために、タスク定義の `portMappings` �
 | Client の出力 | エミュレータは終わったコンテナを後から消す。コンテナができた時点で `docker logs -f` と `docker wait` を付けて取る |
 | 実通信 | client → squid → WireMock で、`test:ci` の 3 項目と 4 シナリオが PASS |
 
+## CDK で AWS へデプロイする（タスク定義の一本化）
+
+目的は、ローカルと CI で検証したタスク定義が、そのまま AWS にデプロイされることを保証することである。
+タスク定義の元は `ecs/task-definition.template.json` の1つにする。ローカルと CI は `render`、AWS は CDK が、同じ雛形から作る。
+
+### 要件
+
+| ID | 要件 | 受け入れ条件 |
+| --- | --- | --- |
+| R14 | AWS のタスク定義は、雛形から CDK が作る | CDK のコードに、コンテナ名、環境変数（イメージ以外）、ヘルスチェック、依存関係を書かない |
+| R15 | AWS 用のスタックは、WireMock なしの `direct` に固定する | `mock` を指定できない。`SQUID_MOCK_*` が出力に含まれない。宛先は `https://` だけ |
+| R16 | 一本化していることを機械で確かめる | `cdk synth` の出力と `render` の本番用の出力が、イメージ、ログ、ロール以外で一致する（`check-cdk`） |
+| R17 | CI は AWS に接続しない | ワークフローに認証情報と Secrets を足さない。`cdk synth` と `check-cdk` だけを行う |
+
+### 決定（clarify）
+
+| ID | 論点 | 決定 |
+| --- | --- | --- |
+| Q1 | 検査の方法 | jest は入れない（テストは E2E だけ）。`check-cdk` を既存の Python スクリプトに足し、`cdk synth` の出力を検査する |
+| Q2 | スタックの範囲 | VPC、VPC Block Public Access の除外、セキュリティグループ、ECS クラスタ、ロググループ、実行ロール、タスク定義。サービスは作らない（`run-task` は利用者が実行） |
+| Q3 | ネットワーク | プライベートサブネットと NAT Gateway 1 つ。除外は `allow-egress`。セキュリティグループのアウトバウンドは 443 のみ |
+| Q4 | イメージ | CDK のアセットでビルドして ECR へ置く。`runtimePlatform` は ARM64 固定 |
+| Q5 | 配置 | `cdk/` に TypeScript。依存は `cdk/package.json` に置き、ルートの `package.json` は変えない |
+| Q6 | CI | `npm ci` と `cdk synth` と `check-cdk` を足す |
+
+### 計画
+
+1. 雛形は、ECS の API の JSON と同じ camelCase のキーを使う。CDK の L1（`CfnTaskDefinition`）の TypeScript の props も
+   camelCase なので、キーの変換は要らない。TypeScript は、雛形を読み、許可したキーだけを通し、プレースホルダーを置換する。
+2. 置換するのは、イメージ（アセットの URI）、`SQUID_UPSTREAM`（`direct` 固定）、`TEST_API_BASE_URL`、ログ、実行ロール、
+   `runtimePlatform` である。`render` の本番用と同じ内容になる。
+3. アセットのビルド文脈は、`swsc_build_images` と同じ内容を `cdk/.assets/` に作る（Git の管理外）。
+4. 検査は `check-cdk` が行う。`cdk synth` の出力の `AWS::ECS::TaskDefinition` を camelCase に直し、イメージ、ログ、
+   ロールの項目を除き、`render` の本番用の出力（同じく除いたもの）と比べる。`check-production` と同じ条件も確かめる。
+
+### 作業
+
+1. `cdk/` の雛形（`package.json`、`tsconfig.json`、`cdk.json`、`bin/app.ts`、`lib/`）を作る。
+2. 雛形の読み込みと検査、`CfnTaskDefinition` の生成を書く。
+3. ネットワーク、クラスタ、ログ、ロールを書く。
+4. `check-cdk` を `scripts/e2e-taskdef.py` と `scripts/e2e.sh` に足す。
+5. `cdk synth` と `check-cdk` を、ローカルで実行して確かめる。
+6. CI に足す。README と `docs/` を更新する。
+7. AWS へデプロイして `run-task` し、確認後に削除する。
+
+### Analyze（CDK）
+
+- R14〜R17 は、作業 2〜6 に対応する。AWS での確認は作業 7 である。
+- 雛形に `portMappings` が無い、`image` が1つの置換だけで済むなど、変換は小さい見込み。雛形が許可していないキーは、
+  CDK 側でも拒否する。
+- `README` の「デプロイは実行しない」方針は、AWS へのデプロイ手段として CDK を足すことで変わる。ただし、デプロイの実行は
+  引き続き利用者が行い、CI は行わない。
+- 確認済み（ローカル）: `cdk synth` が認証情報なしで通る。`check-cdk` が合格し、9 通りの改ざん（`mock` への変更、
+  WireMock の変数、`http://`、環境変数の追加、ヘルスチェックの変更、CPU の変更、不明なキー、依存関係の削除、
+  コンテナの追加）をすべて検出する。
+- AWS での確認（2026-11-12、`ap-northeast-1`）: `cdk deploy`（約 3 分）で作ったスタックに `run-task` し、確認後に `cdk destroy` で
+  削除した。タスク定義は ARM64 の `awsvpc` で、プライベートサブネットと NAT Gateway 経由で動いた。
+
+  | ケース | 結果 |
+  | --- | --- |
+  | `https://httpbin.org/status/200` | `CLIENT_STATUS=200`。Squid のログに `CONNECT httpbin.org:443` が `TCP_TUNNEL/200` で残る |
+  | `https://httpbin.org/status/500` | 5xx を 3 回再試行し、`retries_exhausted`（試行 4、`CLIENT_STATUS=500`） |
+  | `https://example.org`（許可外） | Squid が `CONNECT` を拒否し、`curl: (56) CONNECT tunnel failed, response 403` |
+
+  削除後は、スタック、VPC、NAT Gateway、サブネット、ロググループが残らない。CDK のアセットとして ECR に置いた 2 つのイメージも
+  削除した（`cdk destroy` は消さない）。
+- 未確認: CI での実行。
+- スタックに `env` を渡さない。渡すと、AZ の検索結果（`cdk.context.json`）や `cdk.out` にアカウント ID が残るため。
+
 ## 計画と作業
 
 作業は完了している。

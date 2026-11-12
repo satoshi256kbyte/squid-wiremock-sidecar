@@ -48,3 +48,9 @@ regex = '''(?i)(?:account|aws)[^0-9\r\n]{0,20}[0-9]{12}\b'''
 id = "identity-ecr-uri-shape"
 description = "ECR のイメージURIの形（12桁のアカウントIDの直後に .dkr.ecr. が続く）。12桁の番号を含む URI を、語の有無によらず検出する（段2）"
 regex = '''[0-9]{12}\.dkr\.ecr\.'''
+# 追跡対象ではない依存パッケージ（cdk/node_modules）を、パスで除外する。
+# Why: サードパーティの文書に、例示の ARN やアカウントIDの形が大量に含まれ、このリポジトリの識別情報の検査と無関係なため。
+# 値や語の除外ではなく、.gitignore 済みの依存パッケージのディレクトリだけに限る。追跡対象の cdk/ のファイルは検査する。
+[[allowlists]]
+description = "cdk の依存パッケージ（追跡対象ではない）"
+paths = ['''^cdk/node_modules/''']

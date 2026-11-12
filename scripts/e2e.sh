@@ -16,7 +16,7 @@ SWSC_ROOT=$ROOT
 usage() {
   cat >&2 <<'EOF'
 使い方: sh scripts/e2e.sh <操作> [引数]
-操作: start | test | logs | stop | clean | test:ci [シナリオ名...] | collect | check-production <ファイル>
+操作: start | test | logs | stop | clean | test:ci [シナリオ名...] | collect | check-production <ファイル> | check-cdk [ファイル]
 EOF
 }
 
@@ -73,6 +73,15 @@ case $op in
     fi
     swsc_need_cmd python3 || exit 1
     exec python3 -B "$ROOT/scripts/e2e-taskdef.py" check-production "$1"
+    ;;
+  check-cdk)
+    # Why: cdk synth の出力（既定の場所）が、render の本番用の出力と一致するか。AWS には接続しない。
+    if [ $# -gt 1 ]; then
+      printf 'FAIL: check-cdk は検査するファイルを1つまで指定する\n' >&2
+      exit 2
+    fi
+    swsc_need_cmd python3 || exit 1
+    exec python3 -B "$ROOT/scripts/e2e-taskdef.py" check-cdk "${1:-$ROOT/cdk/cdk.out/SwscSidecar.template.json}"
     ;;
   *)
     usage

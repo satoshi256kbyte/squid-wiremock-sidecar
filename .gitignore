@@ -44,3 +44,6 @@ postgres_data/
 # M09 ローカル実行（完成版の生成物、収集ログ）
 .e2e/
 e2e-logs/
+# CDK の生成物
+cdk/cdk.out/
+cdk/.assets/
