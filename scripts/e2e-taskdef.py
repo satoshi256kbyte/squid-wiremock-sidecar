@@ -28,12 +28,14 @@ API_BASE_URL_ENV = "TEST_API_BASE_URL"
 # Squid に付けた別名へ向ける。本番は 127.0.0.1:3128 のままにするので、本番では指定を拒否する。
 PROXY_URL_RE = re.compile(r"\Ahttp://[A-Za-z0-9.-]{1,253}:[0-9]{1,5}\Z")
 PROXY_ENV_NAMES = ("HTTP_PROXY", "HTTPS_PROXY")
+# Fargate の CPU アーキテクチャ。Why: arm64 のマシンで作ったイメージを動かすには ARM64 を指定する。
+CPU_ARCHITECTURES = {"x86_64": "X86_64", "arm64": "ARM64"}
 WHOLE_PLACEHOLDER_RE = re.compile(r"\A\{\{([A-Z_]+)\}\}\Z")
 LEFTOVER_RE = re.compile(r"\{\{|\}\}")
 
 # 許可リスト。Why: 許可しない項目（volumes、secrets など）を黙って通さず、名指しで止めるため（Q-913）。
 TOP_KEYS = {"family", "networkMode", "requiresCompatibilities", "cpu", "memory", "containerDefinitions",
-            "executionRoleArn", "taskRoleArn"}
+            "executionRoleArn", "taskRoleArn", "runtimePlatform"}
 CONTAINER_KEYS = {"name", "image", "essential", "environment", "portMappings", "dependsOn",
                   "healthCheck", "command", "entryPoint", "logConfiguration"}
 LOG_KEYS = {"logDriver", "options"}
@@ -245,6 +247,12 @@ def apply_overrides(doc, args):
                 },
             }
 
+    if args.cpu_architecture:
+        doc["runtimePlatform"] = {
+            "cpuArchitecture": CPU_ARCHITECTURES[args.cpu_architecture],
+            "operatingSystemFamily": "LINUX",
+        }
+
     for option, key, value in (("--execution-role-arn", "executionRoleArn", args.execution_role_arn),
                                ("--task-role-arn", "taskRoleArn", args.task_role_arn)):
         if value:
@@ -342,6 +350,8 @@ def build_parser():
     render.add_argument("--proxy-url", help="Client のプロキシ（HTTP_PROXY、HTTPS_PROXY）。local だけ")
     render.add_argument("--log-group", help="CloudWatch Logs のロググループ。--log-region と一緒に指定する")
     render.add_argument("--log-region")
+    render.add_argument("--cpu-architecture", choices=sorted(CPU_ARCHITECTURES),
+                        help="Fargate の CPU アーキテクチャ。省略時は指定しない（Fargate の既定の x86_64）")
     render.add_argument("--execution-role-arn")
     render.add_argument("--task-role-arn")
     render.set_defaults(func=cmd_render)
