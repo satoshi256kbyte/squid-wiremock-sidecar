@@ -38,10 +38,9 @@ flowchart LR
       Squid["Squid :3128<br/>SQUID_UPSTREAM=mock"]
       Client -->|"api.example.com"| Squid
     end
-    WM["WireMock :8080<br/>wiremock-scenarios/ (JSON)"]
+    WM["WireMock :8080"]
     Squid -->|"転送"| WM
   end
-  Dev(["開発者<br/>npm run test:ci"]) -.->|"管理 API (127.0.0.1:8080)"| WM
 ```
 
 ### CI（GitHub Actions）
@@ -51,16 +50,15 @@ flowchart LR
 
 ```mermaid
 flowchart LR
-  subgraph Runner["GitHub Actions ランナー (ubuntu-24.04 / Docker)"]
+  subgraph Runner["GitHub Actions ランナー (ubuntu / Docker)"]
     subgraph NS["pause の namespace (localhost を共有)"]
       Client["Client<br/>HTTP_PROXY=127.0.0.1:3128"]
       Squid["Squid :3128<br/>SQUID_UPSTREAM=mock"]
       Client -->|"api.example.com"| Squid
     end
-    WM["WireMock :8080<br/>wiremock-scenarios/ (JSON)"]
+    WM["WireMock :8080"]
     Squid -->|"転送"| WM
   end
-  WF(["ワークフロー<br/>npm run test:ci<br/>+ 4シナリオ"]) -.->|"管理 API (127.0.0.1:8080)"| WM
 ```
 
 ### AWS 本番（ECS Fargate）
@@ -69,14 +67,14 @@ WireMock は無く、起動しません。Squid は外部 API へ直接つなぎ
 ECS タスクは `awsvpc` モードで、Client と Squid が localhost を共有します。
 
 ```mermaid
-flowchart LR
+flowchart
   subgraph VPC["VPC"]
-    subgraph Task["ECS タスク (Fargate / awsvpc, localhost を共有)"]
+    subgraph Task["Amazon ECS タスク (Fargate / awsvpc, localhost を共有)"]
       App["アプリ (Client)<br/>HTTP_PROXY=127.0.0.1:3128"]
       Squid["Squid sidecar :3128<br/>SQUID_UPSTREAM=direct"]
       App -->|"api.example.com"| Squid
     end
-    NAT["NAT Gateway など<br/>(外へ出る経路)"]
+    NAT["NAT Gateway など"]
     Squid --> NAT
   end
   NAT --> API(["外部 API<br/>(本物)"])
