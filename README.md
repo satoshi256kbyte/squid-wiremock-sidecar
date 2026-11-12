@@ -72,6 +72,7 @@ cd cdk && npx cdk deploy         # 利用者の AWS 環境で行う
 | [要件定義](docs/要件定義.md) | 元の要件 |
 | [仕様](specs/MVP/spec.md) | 要件の受け入れ条件と、確認結果の記録 |
 | [テスト方式](docs/テスト方式.md) | 実行方法、検査の内容、シナリオの追加、AWS での確認（httpbin.org）、CI、後始末 |
+| [解説記事](docs/解説記事.md) | 設計と判断の理由を、順に説明する読み物 |
 | [AWS へのデプロイ](docs/AWSへのデプロイ.md) | CDK と手動の手順 |
 | [AGENTS.md](AGENTS.md) | 開発のルール（コミット前の確認など） |
 
