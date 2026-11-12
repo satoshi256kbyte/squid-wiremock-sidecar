@@ -132,7 +132,18 @@ R12 で Squid を公開しないために、タスク定義の `portMappings` �
 - 確認済み（ローカル）: `cdk synth` が認証情報なしで通る。`check-cdk` が合格し、9 通りの改ざん（`mock` への変更、
   WireMock の変数、`http://`、環境変数の追加、ヘルスチェックの変更、CPU の変更、不明なキー、依存関係の削除、
   コンテナの追加）をすべて検出する。
-- 未確認: AWS へ `cdk deploy` して `run-task` した結果。CI での実行。
+- AWS での確認（2026-11-12、`ap-northeast-1`）: `cdk deploy`（約 3 分）で作ったスタックに `run-task` し、確認後に `cdk destroy` で
+  削除した。タスク定義は ARM64 の `awsvpc` で、プライベートサブネットと NAT Gateway 経由で動いた。
+
+  | ケース | 結果 |
+  | --- | --- |
+  | `https://httpbin.org/status/200` | `CLIENT_STATUS=200`。Squid のログに `CONNECT httpbin.org:443` が `TCP_TUNNEL/200` で残る |
+  | `https://httpbin.org/status/500` | 5xx を 3 回再試行し、`retries_exhausted`（試行 4、`CLIENT_STATUS=500`） |
+  | `https://example.org`（許可外） | Squid が `CONNECT` を拒否し、`curl: (56) CONNECT tunnel failed, response 403` |
+
+  削除後は、スタック、VPC、NAT Gateway、サブネット、ロググループが残らない。CDK のアセットとして ECR に置いた 2 つのイメージも
+  削除した（`cdk destroy` は消さない）。
+- 未確認: CI での実行。
 - スタックに `env` を渡さない。渡すと、AZ の検索結果（`cdk.context.json`）や `cdk.out` にアカウント ID が残るため。
 
 ## 計画と作業
