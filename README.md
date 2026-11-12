@@ -165,9 +165,55 @@ npm run lint:md
 固定ポート（8080、14566、15000）は入口のロックで1つの実行だけに限る。並列に実行しない。
 14566 は fakecloud、15000 はイメージのレジストリで、どちらも `127.0.0.1` だけに公開する。
 
-## AWS 本番へのデプロイ
+## AWS へのデプロイ（CDK）
 
-このリポジトリは、デプロイそのものを実行しない。本番向けのタスク定義を作り、検査するところまでを行う。
+`cdk/` の CDK で、サイドカー構成（Client と Squid。WireMock なし）を AWS に作れる。
+タスク定義の元は、ローカルと CI が使うものと同じ `ecs/task-definition.template.json` の1つだけにしている。
+
+| 経路 | タスク定義の作り方 |
+| --- | --- |
+| ローカルと CI | `render --profile local`（WireMock あり） |
+| AWS（CDK） | `cdk/lib/taskdef.ts` が雛形を読み、イメージ、ログ、ロールなどを置き換える（`SQUID_UPSTREAM` は `direct` 固定） |
+| AWS（手動） | `render --profile production`。次節 |
+
+CDK のコードには、コンテナ名、環境変数、ヘルスチェック、依存関係を書かない。一本化していることは、`check-cdk` が確かめる。
+`cdk synth` の出力のタスク定義を、`render` の本番用の出力と比べ、イメージ、ログ、ロール以外が一致することを検査する。
+CI は AWS に接続せず、この `synth` と `check-cdk` だけを行う。デプロイは利用者が行う。
+
+```bash
+npm ci --prefix cdk
+npm run synth --prefix cdk             # cdk/cdk.out に CloudFormation を出す
+sh scripts/e2e.sh check-cdk            # synth の出力が、render の本番用の出力と一致するか
+```
+
+デプロイ（利用者の AWS 環境で行う。初回は `cdk bootstrap` が要る）:
+
+```bash
+cd cdk
+npx cdk deploy                                      # Client の宛先を変えるときは -c apiBaseUrl=https://<ホスト>
+```
+
+デプロイすると、出力に `ClusterName`、`TaskDefinitionArn`、`SubnetIds`、`SecurityGroupId` が出る。
+タスクの起動（`run-task`）は、利用者が行う。サービスは作らない。
+
+```bash
+aws ecs run-task --cluster <ClusterName> --task-definition <TaskDefinitionArn> --launch-type FARGATE \
+  --network-configuration 'awsvpcConfiguration={subnets=[<SubnetIds>],securityGroups=[<SecurityGroupId>]}'
+```
+
+| 項目 | 内容 |
+| --- | --- |
+| ネットワーク | 専用の VPC。プライベートサブネットと NAT Gateway 1つ。セキュリティグループは、アウトバウンドの 443 だけ |
+| VPC Block Public Access | アカウント全体で有効な場合に備え、この VPC だけ `allow-egress` で除外する |
+| 費用 | NAT Gateway は時間で課金される。使い終わったら `npx cdk destroy` で消す |
+| 宛先 | `apiBaseUrl` は `https://` だけ。ドメインは `squid-config/whitelist.txt` に入れ、イメージを作り直す（CDK が再ビルドする） |
+| アーキテクチャ | ARM64 固定。イメージも ARM64 でビルドする |
+| ログ | CloudWatch Logs（保持は1週間）。`CLIENT_STATUS` はここで確認する |
+| 止め方 | タスクは Client が終わっても止まらない（Squid が `essential` のため）。`aws ecs stop-task` で止める |
+
+## AWS 本番へのデプロイ（render を使う手動の方法）
+
+CDK を使わずに、本番向けのタスク定義だけを作り、検査するところまでを行う方法。
 イメージの作成と ECR への push、ECS への登録は、利用者の環境で行う。
 
 1. 本番向けのタスク定義を作る。本番は `--profile production --upstream direct` だけを受け付ける（WireMock は指定できない）。

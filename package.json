@@ -12,7 +12,7 @@
     "stop": "sh scripts/e2e.sh stop",
     "clean": "sh scripts/e2e.sh clean",
     "test:ci": "sh scripts/e2e.sh test:ci",
-    "lint:md": "markdownlint-cli2 \"**/*.md\" \"#node_modules\""
+    "lint:md": "markdownlint-cli2 \"**/*.md\" \"#**/node_modules\""
   },
   "devDependencies": {
     "markdownlint-cli2": "0.24.0"

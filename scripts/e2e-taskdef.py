@@ -6,10 +6,12 @@
 """
 
 import argparse
+import copy
 import json
 import os
 import re
 import sys
+import tempfile
 
 # 値の形式。Why: 値は JSON の文字列として埋まるため、制御文字や区切り記号を入れないように絞る。
 IMAGE_RE = re.compile(r"\A[A-Za-z0-9._/:@-]{1,256}\Z")
@@ -333,6 +335,116 @@ def cmd_check_production(args):
     return 0
 
 
+# ---------------------------------------------------------------------------
+# check-cdk: cdk synth の出力が、render の本番用の出力と一致するか（タスク定義の一本化。R16）。
+# Why: AWS 用のタスク定義は CDK が同じ雛形から作る。コードに別の定義を書いていないことを、出力で確かめる。
+# ---------------------------------------------------------------------------
+
+# 比べない項目。Why: イメージ、ログ、ロールは、AWS 側のリソースの参照（実行時に決まる値）になるため。
+PARITY_IGNORED_TOP = ("executionRoleArn", "taskRoleArn")
+PARITY_IGNORED_CONTAINER = ("image", "logConfiguration")
+DEFAULT_TEMPLATE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "ecs", "task-definition.template.json")
+
+
+def camelize(node):
+    """CloudFormation の PascalCase のキーを、ECS の API と同じ camelCase にする。値は変えない。"""
+    if isinstance(node, dict):
+        out = {}
+        for key, value in node.items():
+            # Why: Fn::GetAtt や Ref などの組み込み関数は、そのまま残す。
+            new_key = key if key.startswith("Fn::") or key == "Ref" else key[:1].lower() + key[1:]
+            out[new_key] = camelize(value)
+        return out
+    if isinstance(node, list):
+        return [camelize(v) for v in node]
+    return node
+
+
+def normalize_for_parity(doc):
+    doc = copy.deepcopy(doc)
+    for key in PARITY_IGNORED_TOP:
+        doc.pop(key, None)
+    containers = doc.get("containerDefinitions", [])
+    for container in containers:
+        for key in PARITY_IGNORED_CONTAINER:
+            container.pop(key, None)
+        container["environment"] = sorted(container.get("environment", []), key=lambda e: str(e.get("name")))
+        if "dependsOn" in container:
+            container["dependsOn"] = sorted(container["dependsOn"], key=lambda d: str(d.get("containerName")))
+    doc["containerDefinitions"] = sorted(containers, key=lambda c: str(c.get("name")))
+    return doc
+
+
+def diff_paths(left, right, prefix=""):
+    """2つの JSON の違う場所を返す。値は返さない（環境変数の値を出さないため）。"""
+    if isinstance(left, dict) and isinstance(right, dict):
+        found = []
+        for key in sorted(set(left) | set(right)):
+            where = f"{prefix}.{key}" if prefix else key
+            if key not in left or key not in right:
+                found.append(where)
+            else:
+                found += diff_paths(left[key], right[key], where)
+        return found
+    if isinstance(left, list) and isinstance(right, list):
+        if len(left) != len(right):
+            return [prefix]
+        found = []
+        for index, (a, b) in enumerate(zip(left, right)):
+            found += diff_paths(a, b, f"{prefix}[{index}]")
+        return found
+    return [] if left == right else [prefix]
+
+
+def cmd_check_cdk(args):
+    doc = load_json(args.file)
+    resources = doc.get("Resources", {}) if isinstance(doc, dict) else {}
+    found = [r for r in resources.values() if isinstance(r, dict) and r.get("Type") == "AWS::ECS::TaskDefinition"]
+    if len(found) != 1:
+        print(f"FAIL: AWS::ECS::TaskDefinition が1つではない（{len(found)} 個）", file=sys.stderr)
+        return 1
+    synth = camelize(found[0].get("Properties", {}))
+
+    findings = []
+    try:
+        check_structure(synth)
+    except Invalid as exc:
+        findings.append(str(exc))
+    if not findings:
+        findings += production_findings(synth)
+        client = next((c for c in synth["containerDefinitions"] if c.get("name") == "client"), None)
+        base_url = None
+        for env in (client or {}).get("environment", []):
+            if env.get("name") == API_BASE_URL_ENV:
+                base_url = env.get("value")
+        if not isinstance(base_url, str) or not base_url.startswith("https://"):
+            findings.append("client: TEST_API_BASE_URL が https:// ではない")
+    if findings:
+        for finding in findings:
+            print(f"FAIL: {finding}", file=sys.stderr)
+        return 1
+
+    # render の本番用の出力を、同じ入力で作って比べる。
+    with tempfile.TemporaryDirectory() as tmp:
+        out = os.path.join(tmp, "rendered.json")
+        render_args = argparse.Namespace(
+            template=args.template, out=out, client_image="ref/client:1", squid_image="ref/squid:1",
+            profile="production", upstream="direct", mock_host=None, mock_port=None,
+            api_base_url=base_url, proxy_url=None, log_group=None, log_region=None,
+            cpu_architecture="arm64", execution_role_arn=None, task_role_arn=None,
+        )
+        cmd_render(render_args)
+        rendered = load_json(out)
+
+    diffs = diff_paths(normalize_for_parity(synth), normalize_for_parity(rendered))
+    for diff in diffs:
+        print(f"FAIL: render の出力と一致しない: {diff}", file=sys.stderr)
+    if diffs:
+        return 1
+    print("OK: cdk synth のタスク定義は、render の本番用の出力と一致した")
+    return 0
+
+
 def build_parser():
     parser = argparse.ArgumentParser(description="M09 タスク定義の生成と検査")
     sub = parser.add_subparsers(dest="command", required=True)
@@ -360,6 +472,11 @@ def build_parser():
     check.add_argument("file")
     check.set_defaults(func=cmd_check_production)
 
+
+    cdk = sub.add_parser("check-cdk", help="cdk synth のタスク定義が、render の本番用の出力と一致するか検査する")
+    cdk.add_argument("file")
+    cdk.add_argument("--template", default=DEFAULT_TEMPLATE)
+    cdk.set_defaults(func=cmd_check_cdk)
     return parser
 
 
