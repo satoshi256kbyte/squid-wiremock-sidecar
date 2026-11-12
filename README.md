@@ -13,7 +13,21 @@ Test Client → Squid Proxy (127.0.0.1:3128) → WireMock (127.0.0.1:8080)
 ## 構成図
 
 違いは WireMock の有無だけです。Client と Squid は、どの環境でも同じ2コンテナで、localhost を共有します。
-Squid の転送先は、環境変数 `SQUID_UPSTREAM` で切り替えます（`mock` は WireMock へ、`direct` は外部 API へ）。
+
+### 環境変数 `SQUID_UPSTREAM`
+
+Squid の転送先は、環境変数 `SQUID_UPSTREAM` で切り替えます。
+値は `mock` か `direct` のどちらかで、それ以外の値だと Squid の起動が失敗します。
+値はタスク定義の Squid コンテナの `environment` に入ります。ローカルと CI は `mock`、AWS 本番は `direct` です。
+
+| 値 | 許可ドメイン宛て | 許可外のドメイン宛て |
+| --- | --- | --- |
+| `mock` | WireMock にだけ転送する。インターネットには出ない | 403 で拒否する。どこにも転送しない |
+| `direct` | 外部 API へ直接つなぐ | 403 で拒否する。どこにも転送しない |
+
+許可ドメインは `squid-config/whitelist.txt` に書きます。許可外を拒否するのは `http_access deny all` で、`SQUID_UPSTREAM` の値に関わらず同じです。
+`direct` では、WireMock への転送の設定を外し、許可ドメインへの直接接続を許可する設定に置き換えます（`ecs/squid/derive-config.sh`）。
+ただし Client が `HTTP_PROXY` を使わずに直接つなぐと、Squid を通らずに外へ出られます。この経路は塞いでいません。
 
 ### ローカル
 
