@@ -27,6 +27,8 @@ Squid の転送先は、環境変数 `SQUID_UPSTREAM` で切り替えます。
 
 許可ドメインは `squid-config/whitelist.txt` に書きます。許可外を拒否するのは `http_access deny all` で、`SQUID_UPSTREAM` の値に関わらず同じです。
 `direct` では、WireMock への転送の設定を外し、許可ドメインへの直接接続を許可する設定に置き換えます（`ecs/squid/derive-config.sh`）。
+判定をするのは Squid です。WireMock は、許可リスト内の宛先として届いた要求に、定義した JSON のパスにだけ応答します。
+定義が無いパスには、WireMock の既定の 404 が返ります。
 ただし Client が `HTTP_PROXY` を使わずに直接つなぐと、Squid を通らずに外へ出られます。この経路は塞いでいません。
 
 ### ローカル
@@ -39,14 +41,14 @@ flowchart LR
   subgraph Host["自分の PC (Docker)"]
     subgraph NS["pause の namespace (localhost を共有)"]
       Client["Client<br/>HTTP_PROXY=127.0.0.1:3128"]
-      Squid["Squid :3128<br/>SQUID_UPSTREAM=mock"]
+      Squid["Squid :3128<br/>許可リストで判定<br/>SQUID_UPSTREAM=mock"]
       Client -->|"api.example.com"| Squid
     end
     WM["WireMock :8080<br/>wiremock-scenarios/ (JSON)"]
-    Squid -->|"許可ドメインだけ"| WM
+    Squid -->|"許可リスト内の宛先"| WM
   end
   Dev(["開発者<br/>npm run test:ci"]) -.->|"管理 API (127.0.0.1:8080)"| WM
-  Squid -. "許可外は 403" .-> X(["拒否"])
+  Squid -. "許可リスト外の宛先" .-> X(["403 で拒否"])
 ```
 
 ### CI（GitHub Actions）
@@ -59,19 +61,19 @@ flowchart LR
   subgraph Runner["GitHub Actions ランナー (ubuntu-24.04 / Docker)"]
     subgraph NS["pause の namespace (localhost を共有)"]
       Client["Client<br/>HTTP_PROXY=127.0.0.1:3128"]
-      Squid["Squid :3128<br/>SQUID_UPSTREAM=mock"]
+      Squid["Squid :3128<br/>許可リストで判定<br/>SQUID_UPSTREAM=mock"]
       Client -->|"api.example.com"| Squid
     end
     WM["WireMock :8080<br/>wiremock-scenarios/ (JSON)"]
-    Squid -->|"許可ドメインだけ"| WM
+    Squid -->|"許可リスト内の宛先"| WM
   end
   WF(["ワークフロー<br/>npm run test:ci<br/>+ 4シナリオ"]) -.->|"管理 API (127.0.0.1:8080)"| WM
-  Squid -. "許可外は 403" .-> X(["拒否"])
+  Squid -. "許可リスト外の宛先" .-> X(["403 で拒否"])
 ```
 
 ### AWS 本番（ECS Fargate）
 
-WireMock は無く、起動しません。Squid は許可ドメインだけを、外部 API へ直接つなぎます（`SQUID_UPSTREAM=direct`）。
+WireMock は無く、起動しません。Squid は、許可リスト内の宛先を外部 API へ直接つなぎ、許可リスト外は 403 で拒否します（`SQUID_UPSTREAM=direct`）。
 ECS タスクは `awsvpc` モードで、Client と Squid が localhost を共有します。
 
 ```mermaid
@@ -79,14 +81,14 @@ flowchart LR
   subgraph VPC["VPC"]
     subgraph Task["ECS タスク (Fargate / awsvpc, localhost を共有)"]
       App["アプリ (Client)<br/>HTTP_PROXY=127.0.0.1:3128"]
-      Squid["Squid sidecar :3128<br/>SQUID_UPSTREAM=direct"]
+      Squid["Squid sidecar :3128<br/>許可リストで判定<br/>SQUID_UPSTREAM=direct"]
       App -->|"api.example.com"| Squid
     end
     NAT["NAT Gateway など<br/>(外へ出る経路)"]
     Squid --> NAT
   end
-  NAT -->|"許可ドメインだけ"| API(["外部 API<br/>(本物)"])
-  Squid -. "許可外は 403" .-> X(["拒否"])
+  NAT -->|"許可リスト内の宛先"| API(["外部 API<br/>(本物)"])
+  Squid -. "許可リスト外の宛先" .-> X(["403 で拒否"])
 ```
 
 | | ローカル | CI | AWS 本番 |
