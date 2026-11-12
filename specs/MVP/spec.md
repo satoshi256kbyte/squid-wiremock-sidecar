@@ -22,7 +22,7 @@ AWS 上でタスクが止まらないこと（Squid が `essential`）も、検�
 
 ## 要件と受け入れ条件
 
-確認は 2026-11-12、ローカルの Docker（Colima）で行った。CI（GitHub Actions）での実行は、まだ確認していない。
+確認は 2026-11-12、ローカルの Docker（Colima）で行った。CI（GitHub Actions）では PR #44 で通った。AWS での確認は、Analyze に書く。
 
 | ID | 要件 | 受け入れ条件（確認方法） | 結果 |
 | --- | --- | --- | --- |
@@ -90,7 +90,18 @@ R12 で Squid を公開しないために、タスク定義の `portMappings` �
 ## Analyze
 
 - R1〜R13 は、実機の確認結果と受け入れ条件が対応している。
-- 未確認: CI（GitHub Actions）での実行。AWS 本物での `run-task`。HTTPS（`httpbin.org`）の実通信。
+- AWS での確認（2026-11-12、`ap-northeast-1`、専用の VPC と ECS クラスタを作り、確認後に削除した）:
+  本番用の完成版（`--profile production --upstream direct`、`--cpu-architecture arm64`）を、Fargate で `run-task` した。
+
+  | ケース | 結果 |
+  | --- | --- |
+  | `https://httpbin.org/status/200` | `CLIENT_STATUS=200`。Squid のログに `CONNECT httpbin.org:443` が `TCP_TUNNEL/200` で残る |
+  | `https://httpbin.org/status/500` | 5xx を 3 回再試行し、`retries_exhausted`（試行 4、`CLIENT_STATUS=500`） |
+  | `https://example.org`（許可外） | Squid が `CONNECT` を拒否し、`curl: (56) CONNECT tunnel failed, response 403` |
+
+  VPC は、アカウント全体の VPC Block Public Access（`block-bidirectional`）の除外が要る。公開サブネットの
+  公開 IP は IGW 経由の双方向の通信になるため、`allow-bidirectional` を使い、インバウンドはセキュリティグループで閉じた。
+- 未確認: CI（GitHub Actions）の再実行。NAT Gateway 経由の構成。
 - R7 の本番向けタスク定義の検査（`check-production`）は動くが、E2E に入れていない。MVP の範囲外とする。
 - 検査 3（Squid 再起動後）の Client は、ECS を通らない。タスクの Client は1回で終わるため。
 - fakecloud は Docker のソケットを持つ。セキュリティに関わる変更として、コミット前のレビューを受ける。

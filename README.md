@@ -173,6 +173,8 @@ npm run lint:md
 1. 本番向けのタスク定義を作る。本番は `--profile production --upstream direct` だけを受け付ける（WireMock は指定できない）。
    `--api-base-url` は、Client が叩く先（`TEST_API_BASE_URL`）で、本番では `https://` だけを受け付ける。
    ログとロールの引数は省略できる。ログは `--log-group` と `--log-region` を一緒に指定する。
+   `--cpu-architecture` は、Fargate の CPU アーキテクチャ（`arm64` か `x86_64`）で、省略すると指定しない（既定は x86_64）。
+   arm64 の Mac でビルドしたイメージを動かすときは `arm64` を指定する。
 
    ```bash
    python3 -B scripts/e2e-taskdef.py render \
@@ -182,7 +184,8 @@ npm run lint:md
      --profile production --upstream direct \
      --api-base-url https://httpbin.org \
      --log-group <ロググループ名> --log-region <リージョン> \
-     --execution-role-arn <実行ロールの ARN> --task-role-arn <タスクロールの ARN>
+     --execution-role-arn <実行ロールの ARN> --task-role-arn <タスクロールの ARN> \
+     --cpu-architecture arm64
    ```
 
    叩く先の `httpbin.org` は、Squid の許可リスト（`squid-config/whitelist.txt`）に入れてある。
