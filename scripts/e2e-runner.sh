@@ -176,6 +176,7 @@ swsc_task_attach() { # タスクID
     fi
     sleep 0.05
   done
+  # WireMock をタスクのネットワークにつなぐ（Squid が swsc-wiremock で名前解決できるようになる）
   docker network connect "$_net" swsc-wiremock || return 1
   until docker inspect "$1-squid" >/dev/null 2>&1; do
     if [ "$(date +%s)" -ge "$_limit" ]; then
@@ -184,6 +185,8 @@ swsc_task_attach() { # タスクID
     fi
     sleep 0.05
   done
+  # Squid をネットワークからいったん外し、別名 swsc-squid を付けてつなぎ直す（アプリが swsc-squid で名前解決できるようになる）
+  # コンテナの再起動ではない。つなぎ直すのは、つないだ後から別名だけを足せないため
   docker network disconnect "$_net" "$1-squid" || return 1
   docker network connect --alias swsc-squid "$_net" "$1-squid"
 }

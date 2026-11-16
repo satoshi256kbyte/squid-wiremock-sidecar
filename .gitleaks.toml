@@ -7,24 +7,25 @@
 title = "squid-wiremock-sidecar の識別情報の検査"
 
 # 段1 の対象ファイル。置き換え前の検査（m09 の t_doc_has_no_identity_values、m08 の unit_doc）と同じ範囲。
+# 文書を統合したため、統合前のテスト関連の文書は docs/テスト方式.md、ポート公開範囲は ARCHITECTURE.md に置き換えた。
 # 文字列の末尾を $ で止め、パスの接尾辞だけが一致しないようにする。この設定自身は含まない。
 
 [[rules]]
 id = "identity-doc-12digit"
 description = "置き換え前の t_doc_has_no_identity_values（m09）と unit_doc（m08）の 12桁の数字の検査（段1）"
-path = '''^(?:docs/ローカル実行とCI\.md|README\.md|AGENTS\.md|docs/ポート公開範囲\.md|squid-config/squid\.conf|squid-config/whitelist\.txt|ecs/task-definition\.template\.json|ecs/squid/Dockerfile|ecs/squid/derive-config\.sh|ecs/squid/entrypoint\.sh|docs/E2Eテスト\.md)$'''
+path = '''^(?:docs/テスト方式\.md|README\.md|AGENTS\.md|ARCHITECTURE\.md|squid-config/squid\.conf|squid-config/whitelist\.txt|ecs/task-definition\.template\.json|ecs/squid/Dockerfile|ecs/squid/derive-config\.sh|ecs/squid/entrypoint\.sh)$'''
 regex = '''[0-9]{12}'''
 
 [[rules]]
 id = "identity-doc-arn"
 description = "置き換え前の t_doc_has_no_identity_values（m09）と unit_doc（m08）の arn:aws の検査（段1）"
-path = '''^(?:docs/ローカル実行とCI\.md|README\.md|AGENTS\.md|docs/ポート公開範囲\.md|squid-config/squid\.conf|squid-config/whitelist\.txt|ecs/task-definition\.template\.json|ecs/squid/Dockerfile|ecs/squid/derive-config\.sh|ecs/squid/entrypoint\.sh|docs/E2Eテスト\.md)$'''
+path = '''^(?:docs/テスト方式\.md|README\.md|AGENTS\.md|ARCHITECTURE\.md|squid-config/squid\.conf|squid-config/whitelist\.txt|ecs/task-definition\.template\.json|ecs/squid/Dockerfile|ecs/squid/derive-config\.sh|ecs/squid/entrypoint\.sh)$'''
 regex = '''arn:aws'''
 
 [[rules]]
 id = "identity-doc-akia"
 description = "置き換え前の t_doc_has_no_identity_values（m09）の AKIA の検査（段1）。unit_doc には無いが、m09 の検査の範囲を含める"
-path = '''^(?:docs/ローカル実行とCI\.md|README\.md|AGENTS\.md|docs/ポート公開範囲\.md|squid-config/squid\.conf|squid-config/whitelist\.txt|ecs/task-definition\.template\.json|ecs/squid/Dockerfile|ecs/squid/derive-config\.sh|ecs/squid/entrypoint\.sh|docs/E2Eテスト\.md)$'''
+path = '''^(?:docs/テスト方式\.md|README\.md|AGENTS\.md|ARCHITECTURE\.md|squid-config/squid\.conf|squid-config/whitelist\.txt|ecs/task-definition\.template\.json|ecs/squid/Dockerfile|ecs/squid/derive-config\.sh|ecs/squid/entrypoint\.sh)$'''
 regex = '''AKIA'''
 
 # 段2: path を指定せず、追跡対象の全体を値の形に絞って検出する。
