@@ -1,6 +1,6 @@
 #!/bin/sh
-# 代表4シナリオ（normal、error-500-then-200、ratelimit-429、slow-5000）を実通信で実行する。
-# 使い方: sh scripts/e2e-scenarios.sh [シナリオ名...]。省略時は4つを既定の順に実行する。
+# アプリの7シナリオ（正常、遅延、500、503、429、タイムアウト）を実通信で実行する。
+# 使い方: sh scripts/e2e-scenarios.sh [シナリオ名...]。省略時は7つを既定の順に実行する。
 # 起動、実行、収集、停止を持つ。scripts/e2e.sh の test:ci が、ロックを取ったうえでこのスクリプトを呼ぶ。
 set -eu
 
@@ -36,20 +36,20 @@ SWSC_ROOT=$ROOT
 . "$ROOT/scripts/e2e-runner.sh"
 
 # 既定の実行順。slow-5000 を最後に置くのは、遅れた記録を次のシナリオのリセット確認に混ぜないため。
-E2E_ORDER="normal error-500-then-200 ratelimit-429 slow-5000"
+E2E_ORDER="normal slow-100 error-500-then-200 error-500 error-503 ratelimit-429 slow-5000"
 
 usage() { # 理由
   printf 'e2e-scenarios: %s\nusage: sh scripts/e2e-scenarios.sh [シナリオ名...]\n' "$1" >&2
   exit 2
 }
 
-# E2E 対象の名前だけを通す。未定義は定義済みの一覧を、対象外は対象4名を出す。
+# E2E 対象の名前だけを通す。未定義は定義済みの一覧を、対象外は対象の名前を出す。
 validate_name() { # 名前
   case " $E2E_ORDER " in
     *" $1 "*) return 0 ;;
   esac
   if printf '%s\n' "$(scenario_names)" | grep -Fxq "$1"; then
-    printf 'シナリオ %s は代表4シナリオに含まれない。対象は %s\n' "$1" "$E2E_ORDER" >&2
+    printf 'シナリオ %s は E2E の対象に含まれない。対象は %s\n' "$1" "$E2E_ORDER" >&2
   else
     printf '未定義のシナリオ: %s\n定義済み: %s\n' "$1" "$(scenario_names | tr '\n' ' ')" >&2
   fi
@@ -59,11 +59,14 @@ validate_name() { # 名前
 # ---- 実装: シナリオ表 ----
 
 # 期待値の文字列。項目の順は実測値と揃えてあり、文字列の一致で合否を決める。
-# 429 の 4 と 3 は固定値で書く。retry-lib の既定値との突き合わせは unit で行う（Q-811）。
+# 429 の 4 と 3 は固定値で書く。アプリ（app/retry.js）の既定の再試行回数と同じ値。
 scenario_expect() { # 名前
   case "$1" in
     normal) printf '%s\n' 'status=200 result=success attempts=1 retries=0 wiremock=1 rc=0' ;;
     error-500-then-200) printf '%s\n' 'status=200 result=success attempts=2 retries=1 wiremock=2 rc=0' ;;
+    slow-100) printf '%s\n' 'status=200 result=success attempts=1 retries=0 wiremock=1 rc=0' ;;
+    error-500) printf '%s\n' 'status=500 result=retries_exhausted attempts=4 retries=3 wiremock=4 rc=0' ;;
+    error-503) printf '%s\n' 'status=503 result=retries_exhausted attempts=4 retries=3 wiremock=4 rc=0' ;;
     ratelimit-429) printf '%s\n' 'status=429 result=retries_exhausted attempts=4 retries=3 wiremock=4 rc=0' ;;
     slow-5000) printf '%s\n' 'status=- result=timeout attempts=1 retries=0 wiremock=1 rc=28' ;;
     *) return 2 ;;
@@ -74,7 +77,7 @@ scenario_expect() { # 名前
 scenario_env() { # 名前
   case "$1" in
     slow-5000) printf '%s\n' 'RESPONSE_TIMEOUT_SECONDS=1' ;;
-    normal | error-500-then-200 | ratelimit-429) printf '\n' ;;
+    normal | slow-100 | error-500-then-200 | error-500 | error-503 | ratelimit-429) printf '\n' ;;
     *) return 2 ;;
   esac
 }
@@ -149,6 +152,11 @@ extra_checks() { # 名前 標準出力 標準エラー
       extra_expect '500 の再試行行（retry=1/3 wait=1）' \
         grep -Fq 'CLIENT_DIAG retry attempt=1 status=500 class=5xx retry=1/3 wait=1' "$3" || return 1
       ;;
+    error-500 | error-503)
+      # 待機は 1、2、4 秒と倍になり、3回目の再試行（最後）が 4 秒になる。
+      extra_expect '5xx の待機が倍々になる（1、2、4 秒）' \
+        test "$(grep -c '^CLIENT_DIAG retry .*class=5xx retry=1/3 wait=1$\|^CLIENT_DIAG retry .*class=5xx retry=2/3 wait=2$\|^CLIENT_DIAG retry .*class=5xx retry=3/3 wait=4$' "$3" || true)" -eq 3 || return 1
+      ;;
     ratelimit-429)
       extra_expect '429 の retry 行が3本' \
         test "$(grep -c '^CLIENT_DIAG retry .*class=429 ' "$3" || true)" -eq 3 || return 1
@@ -212,6 +220,15 @@ wiremock_count() { # URLパス
   printf '%s' "$_n"
 }
 
+# シナリオの名前からパスを引く。名前表（scenario-lib）に無い2つ（500 と 503 が続く定義）は、ここで直接書く。
+scenario_path_of() { # 名前
+  case "$1" in
+    error-500) printf '%s\n' /api/error-500 ;;
+    error-503) printf '%s\n' /api/error-503 ;;
+    *) scenario_path "$1" ;;
+  esac
+}
+
 # 各シナリオの前に、リセットして確認する。どちらかが外れたら 1 を返す。
 suite_reset() {
   wiremock_reset && wiremock_verify_reset wiremock-scenarios/mappings
@@ -230,7 +247,7 @@ run_one() { # 名前
   _nm=$1
   _want=$(scenario_expect "$_nm") || return 1
   _env=$(scenario_env "$_nm") || return 1
-  _path=$(scenario_path "$_nm") || return 1
+  _path=$(scenario_path_of "$_nm") || return 1
   _od=$(mktemp -d "$WORK/run.XXXXXX") || return 1
   _t0=$(date +%s)
   _rc=0
@@ -261,7 +278,7 @@ run_one() { # 名前
 # Why: 続行と停止を分けるのは、リセットが外れると後続の結果が前の混入を受けるため（FR-807、FR-811）。
 run_suite() { # シナリオ名...
   if [ "$#" -eq 0 ]; then
-    # shellcheck disable=SC2086 # E2E_ORDER は上の固定の文字列（空白区切りの4シナリオ名）で、語ごとに分ける意図
+    # shellcheck disable=SC2086 # E2E_ORDER は上の固定の文字列（空白区切りのシナリオ名）で、語ごとに分ける意図
     set -- $E2E_ORDER
   fi
   # shellcheck disable=SC2031 # RESULTS は呼び出し元が設定する値で、この関数では空に作り直す意図

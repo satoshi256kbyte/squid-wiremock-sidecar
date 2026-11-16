@@ -16,6 +16,7 @@ Client → Squid (:3128) → 外部 API（HTTPS）       AWS（SQUID_UPSTREAM=di
 .
 ├── .github/                    # GitHub の設定
 │   └── workflows/              #   CI（e2e-test.yml）
+├── app/                        # クライアントアプリ（Node.js）。E2E の対象
 ├── cdk/                        # AWS 用の CDK（TypeScript）
 │   ├── bin/                    #   エントリポイント
 │   └── lib/                    #   スタック、タスク定義の生成、アセットの用意
@@ -27,7 +28,6 @@ Client → Squid (:3128) → 外部 API（HTTPS）       AWS（SQUID_UPSTREAM=di
 ├── specs/                      # 仕様
 │   └── MVP/                    #   要件の受け入れ条件と、確認結果の記録（spec.md）
 ├── squid-config/               # Squid の設定と許可リスト
-├── test-client/                # Client（リトライ付きの HTTP クライアント）
 ├── wiremock-scenarios/         # WireMock の応答定義
 │   ├── __files/                #   応答の本文
 │   └── mappings/               #   リクエストと応答の対応（JSON）
@@ -38,7 +38,7 @@ Client → Squid (:3128) → 外部 API（HTTPS）       AWS（SQUID_UPSTREAM=di
 ├── .shellcheckrc
 ├── AGENTS.md                   # 開発のルール
 ├── ARCHITECTURE.md             # この文書
-├── Dockerfile.test-client      # Client のイメージ
+├── Dockerfile.client           # Client（app/）のイメージ
 ├── mise.lock                   # 検査ツールの固定版
 ├── mise.toml
 ├── package-lock.json
@@ -52,12 +52,12 @@ Client → Squid (:3128) → 外部 API（HTTPS）       AWS（SQUID_UPSTREAM=di
 | --- | --- | --- | --- |
 | プロキシ | Squid（`ubuntu/squid` の派生イメージ） | `latest`（固定していない） | 許可ドメインだけを中継する。HTTPS は `CONNECT` で通すだけで、復号しない |
 | モック | WireMock | 3.13.1 | 外部 API の応答（正常、エラー、遅延）を JSON で定義して返す |
-| Client | シェルスクリプトと curl（`alpine`） | alpine 3.20 | リトライとタイムアウトを持つテスト用の HTTP クライアント |
+| Client（アプリ） | Node.js（依存パッケージなし。`node:22-alpine`） | Node 22 | 外部 API を呼ぶクライアントアプリ。リトライとタイムアウトを持つ。E2E の対象 |
 | ECS エミュレータ | fakecloud | 0.51.0（ダイジェストで固定） | ローカルと CI で、タスク定義を `run-task` して動かす。AGPL-3.0 |
 | イメージのレジストリ | `registry` | 2.8.3（ダイジェストで固定） | エミュレータが pull するイメージの置き場 |
 | IaC | AWS CDK（TypeScript） | aws-cdk-lib 2.276.0、aws-cdk 2.1148.1 | AWS へのデプロイ。タスク定義は雛形から作る |
 | タスク定義の雛形 | `ecs/task-definition.template.json` | - | タスク定義の唯一の元 |
-| スクリプト | POSIX sh、Python 3（標準ライブラリだけ）、curl | - | 起動、検査、収集、停止。タスク定義の生成と検査 |
+| スクリプト | POSIX sh、Python 3（標準ライブラリだけ）、curl | - | 起動、検査、収集、停止。タスク定義の生成と検査（アプリ本体は含まない） |
 | 検査ツール | shellcheck、actionlint、gitleaks、jq | `mise.toml` と `mise.lock` で固定 | シェル、ワークフロー、識別情報の検査 |
 | 文書の検査 | markdownlint-cli2 | 0.24.0 | Markdown の検査 |
 | CI | GitHub Actions（`ubuntu-24.04`） | アクションはコミット SHA で固定 | 検査、E2E、`cdk synth`、`check-cdk` |
@@ -76,7 +76,7 @@ Client → Squid (:3128) → 外部 API（HTTPS）       AWS（SQUID_UPSTREAM=di
 
 | 要素 | 役割 | 置き場所 |
 | --- | --- | --- |
-| Client | 外部 API 宛ての通信を、同じタスクの Squid 経由で送る | `test-client/`、`Dockerfile.test-client` |
+| Client | 外部 API 宛ての通信を、同じタスクの Squid 経由で送る。5xx と 429 は再試行し、遅いときはタイムアウトで終わる | `app/`、`Dockerfile.client` |
 | Squid | 許可リストのドメインだけを中継する。転送先は `SQUID_UPSTREAM` で切り替える | `squid-config/`、`ecs/squid/` |
 | WireMock | ローカルと CI だけで動く。AWS では起動しない | `wiremock-scenarios/` |
 | fakecloud とレジストリ | ローカルと CI だけで動く。ECS のタスクをコンテナで実行する | `scripts/e2e-runner.sh` |
@@ -84,6 +84,9 @@ Client → Squid (:3128) → 外部 API（HTTPS）       AWS（SQUID_UPSTREAM=di
 
 WireMock は、タスク定義には入っていない。タスク定義は `client` と `squid` の2コンテナだけで、
 ローカルと CI では WireMock を、タスクの外のコンテナとして別に起動する。
+
+E2E が確かめる対象は、`app/` のクライアントアプリである。再試行の判断は `app/retry.js`、通信と出力は `app/client.js` に置く。
+アプリは、`http://` の宛先はプロキシへ絶対 URL で送り、`https://` の宛先は `CONNECT` でトンネルを作ってから TLS で話す。
 
 ## 環境ごとの構成
 

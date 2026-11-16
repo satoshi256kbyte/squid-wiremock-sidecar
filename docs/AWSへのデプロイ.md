@@ -63,7 +63,7 @@ Client の宛先や環境変数を、その実行だけ変えるときは、`--o
 
 CDK を使わずに、本番向けのタスク定義だけを作り、検査し、登録する方法。
 イメージの作成と ECR への push は、利用者の環境で行う。Squid のイメージは `ecs/squid/Dockerfile`、
-Client のイメージは `Dockerfile.test-client` から作る。
+Client のイメージは `Dockerfile.client`（`app/` の Node.js アプリ）から作る。
 
 1. 本番向けのタスク定義を作る。本番は `--profile production --upstream direct` だけを受け付ける（WireMock は指定できない）。
 

@@ -34,7 +34,7 @@ E2E（Docker を使う。CI と同じ内容）:
 
 ```bash
 npm run test:ci                                                              # 起動、検査、収集、停止を続けて実行する
-sh scripts/e2e.sh test:ci normal error-500-then-200 ratelimit-429 slow-5000  # 4シナリオ
+sh scripts/e2e.sh test:ci normal slow-100 error-500-then-200 error-500 error-503 ratelimit-429 slow-5000  # 7シナリオ
 sh scripts/e2e.sh test:ci error-500-then-200                                 # 1シナリオだけ
 ```
 
@@ -45,8 +45,11 @@ sh scripts/e2e.sh test:ci error-500-then-200                                 # 1
 | シナリオ | 結果 | 目的 |
 | --- | --- | --- |
 | `normal` | 200 | 正常系 |
+| `slow-100` | 100 ミリ秒遅れて 200 | 少しの遅延では再試行しない |
 | `error-500-then-200` | 500 の後に 200 | 再試行して成功する |
-| `ratelimit-429` | 429 が続く | 再試行を使い切る |
+| `error-500` | 500 が続く | 待機を倍々にして、再試行を使い切る |
+| `error-503` | 503 が続く | 503 も 500 と同じく再試行する |
+| `ratelimit-429` | 429 が続く（`Retry-After: 2`） | `Retry-After` に従って待ち、再試行を使い切る |
 | `slow-5000` | 5 秒の遅延 | タイムアウトの処理 |
 
 期待値、見方、追加の手順は [テスト方式](docs/テスト方式.md) を参照。

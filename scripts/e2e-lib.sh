@@ -219,12 +219,11 @@ swsc_infra_running() {
 swsc_build_images() {
   _ctx=$SWSC_E2E_DIR/context
   if [ -d "$_ctx" ]; then rm -r -- "$_ctx" || return 1; fi
-  mkdir -p "$_ctx/client/test-client" || return 1
-  cp "$SWSC_ROOT/Dockerfile.test-client" "$_ctx/client/Dockerfile.test-client" || return 1
-  cp "$SWSC_ROOT/test-client/entrypoint.sh" "$SWSC_ROOT/test-client/retry-lib.sh" \
-    "$_ctx/client/test-client/" || return 1
+  mkdir -p "$_ctx/client/app" || return 1
+  cp "$SWSC_ROOT/Dockerfile.client" "$_ctx/client/Dockerfile.client" || return 1
+  cp "$SWSC_ROOT/app/client.js" "$SWSC_ROOT/app/retry.js" "$_ctx/client/app/" || return 1
   docker build -q --label "$SWSC_LABEL" -t "$SWSC_LOCAL_CLIENT_IMAGE" \
-    -f "$_ctx/client/Dockerfile.test-client" "$_ctx/client" >/dev/null || return 1
+    -f "$_ctx/client/Dockerfile.client" "$_ctx/client" >/dev/null || return 1
   swsc_stage_squid_context "$_ctx/squid" || return 1
   docker build -q --label "$SWSC_LABEL" -t "$SWSC_LOCAL_SQUID_IMAGE" "$_ctx/squid" >/dev/null || return 1
 }
@@ -455,15 +454,15 @@ swsc_test_ci_main() {
   exit "$_rc"
 }
 
-# test:ci の名前指定。代表4シナリオから選んだものだけを、test:ci のロックの下で実行する。
+# test:ci の名前指定。アプリのシナリオから選んだものだけを、test:ci のロックの下で実行する。
 # Why: 起動、実行、収集、停止は scripts/e2e-scenarios.sh が持つ。ここは名前の検査、ロック、子への引き渡しだけを行う。
 # Why: 子には SWSC_LOCK_HELD=1 を渡し、ロックを二重に取らない（test:ci の規約）。
 swsc_test_ci_scenarios() { # シナリオ名...
   for _n in "$@"; do
     case $_n in
-      normal | error-500-then-200 | ratelimit-429 | slow-5000) ;;
+      normal | slow-100 | error-500-then-200 | error-500 | error-503 | ratelimit-429 | slow-5000) ;;
       *)
-        printf 'FAIL: 不明なシナリオ: %s（normal、error-500-then-200、ratelimit-429、slow-5000 から選ぶ）\n' "$_n" >&2
+        printf 'FAIL: 不明なシナリオ: %s（normal、slow-100、error-500-then-200、error-500、error-503、ratelimit-429、slow-5000 から選ぶ）\n' "$_n" >&2
         return 2
         ;;
     esac
@@ -490,7 +489,7 @@ swsc_test_ci_scenarios() { # シナリオ名...
   exit "$_rc"
 }
 
-# test:ci の名前指定の子。代表4シナリオを、親のロックの下（SWSC_LOCK_HELD=1）で動かす。
+# test:ci の名前指定の子。アプリのシナリオを、親のロックの下（SWSC_LOCK_HELD=1）で動かす。
 # Why: 関数に分けるのは、unit で子を差し替えて、信号とロックの扱いだけを確かめるため。
 swsc_test_ci_scenarios_child() { # シナリオ名...
   SWSC_LOCK_HELD=1 exec sh "$SWSC_ROOT/scripts/e2e-scenarios.sh" "$@"

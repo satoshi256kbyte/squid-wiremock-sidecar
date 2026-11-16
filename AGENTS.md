@@ -13,7 +13,7 @@ git ls-files -z '*.sh' | xargs -0 "$(mise which shellcheck)" -s sh -S style --
 "$(mise which gitleaks)" dir . --config .gitleaks.toml --redact --no-banner --exit-code 1
 npm run lint:md    # 文書を変えたときだけ。markdownlint-cli2 を直接実行する
 npm ci --prefix cdk && npm run typecheck --prefix cdk && npm run synth --prefix cdk && sh scripts/e2e.sh check-cdk   # cdk/ か雛形を変えたときだけ
-npm run test:ci && sh scripts/e2e.sh test:ci normal error-500-then-200 ratelimit-429 slow-5000
+npm run test:ci && sh scripts/e2e.sh test:ci normal slow-100 error-500-then-200 error-500 error-503 ratelimit-429 slow-5000
 ```
 
 `npm run test:ci` は Docker を使う。実行できない場合は、成功と書かず、未実行の理由を報告する。

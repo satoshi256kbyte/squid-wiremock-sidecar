@@ -19,9 +19,9 @@ export function stageAssets(repoRoot: string, workDir: string): StagedAssets {
   const squidDir = path.join(workDir, 'squid');
   fs.rmSync(workDir, { recursive: true, force: true });
 
-  copy(repoRoot, 'Dockerfile.test-client', clientDir);
-  copy(repoRoot, 'test-client/entrypoint.sh', path.join(clientDir, 'test-client'));
-  copy(repoRoot, 'test-client/retry-lib.sh', path.join(clientDir, 'test-client'));
+  copy(repoRoot, 'Dockerfile.client', clientDir);
+  copy(repoRoot, 'app/client.js', path.join(clientDir, 'app'));
+  copy(repoRoot, 'app/retry.js', path.join(clientDir, 'app'));
 
   copy(repoRoot, 'squid-config/squid.conf', squidDir);
   copy(repoRoot, 'squid-config/whitelist.txt', squidDir);
