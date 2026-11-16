@@ -4,7 +4,7 @@
 
 ## コミット前の確認
 
-次の4つを実行して、すべて通ることを確かめる。
+次を実行して、すべて通ることを確かめる。
 
 ```bash
 mise install --locked
@@ -12,6 +12,7 @@ git ls-files -z '*.sh' | xargs -0 "$(mise which shellcheck)" -s sh -S style --
 "$(mise which actionlint)" -shellcheck "$(mise which shellcheck)" .github/workflows/e2e-test.yml
 "$(mise which gitleaks)" dir . --config .gitleaks.toml --redact --no-banner --exit-code 1
 npm run lint:md    # 文書を変えたときだけ。markdownlint-cli2 を直接実行する
+npm ci --prefix cdk && npm run typecheck --prefix cdk && npm run synth --prefix cdk && sh scripts/e2e.sh check-cdk   # cdk/ か雛形を変えたときだけ
 npm run test:ci && sh scripts/e2e.sh test:ci normal error-500-then-200 ratelimit-429 slow-5000
 ```
 
@@ -21,7 +22,13 @@ npm run test:ci && sh scripts/e2e.sh test:ci normal error-500-then-200 ratelimit
 ## 言語
 
 - ドキュメントとソースコードのコメントは日本語で書く。
-- `docs/` 配下の新しいファイル名は日本語にする。
+- `docs/` 配下のファイル名は、すべて日本語にする。ルート直下の `README.md`、`AGENTS.md`、`ARCHITECTURE.md` は英語のままにする。
+
+## 文書の置き場
+
+- 構成、技術スタック、公開範囲、設計判断は `ARCHITECTURE.md` に書く。
+- テストの方式、実行方法、シナリオ、AWS での確認は `docs/テスト方式.md` に書く。
+- 新しい文書を作る前に、上の2つと `docs/AWSへのデプロイ.md` に足せないかを考える。同じ内容を複数の文書に書かない。
 
 ## 小さく保つ
 
