@@ -74,9 +74,9 @@ HTTP クライアントの堅牢性を担保するためには、
 | ecs/task-definition.template.json | `./ecs/` | 2 コンテナ（Test Client、Squid Proxy）の定義。WireMock は別の手段で起動する |
 | squid.conf | `./squid-config/` | Proxy の設定ファイル（ルーティングルール、キャッシュ設定） |
 | wiremock-scenarios/ | `./wiremock-scenarios/` | WireMock 用のモック定義（JSON スタブ） |
-| test-client/ | `./test-client/` | テスト対象クライアントアプリケーション |
+| app/ | `./app/` | テスト対象のクライアントアプリケーション（Node.js） |
 | docs/setup-guide.md | `./docs/` | ローカル・CI 環境でのセットアップ手順 |
-| E2E シナリオの実行 | `./scripts/e2e-scenarios.sh` | 正常系・異常系の4シナリオの実行 |
+| E2E シナリオの実行 | `./scripts/e2e-scenarios.sh` | 正常系・異常系の7シナリオの実行 |
 
 ## 8. 制約事項
 

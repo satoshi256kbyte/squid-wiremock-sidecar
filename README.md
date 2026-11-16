@@ -139,7 +139,7 @@ E2E（Docker を使う。CI と同じ内容）:
 
 ```bash
 npm run test:ci                                                              # 起動、検査、収集、停止を続けて実行する
-sh scripts/e2e.sh test:ci normal error-500-then-200 ratelimit-429 slow-5000  # 4シナリオ
+sh scripts/e2e.sh test:ci normal slow-100 error-500-then-200 error-500 error-503 ratelimit-429 slow-5000  # 7シナリオ
 sh scripts/e2e.sh test:ci error-500-then-200                                 # 1シナリオだけ
 ```
 
@@ -250,7 +250,7 @@ CDK を使わずに、本番向けのタスク定義だけを作り、検査す�
    aws ecs register-task-definition --cli-input-json file://taskdef-production.json
    ```
 
-Squid のイメージは `ecs/squid/Dockerfile`、Client のイメージは `Dockerfile.test-client` から作る。
+Squid のイメージは `ecs/squid/Dockerfile`、Client のイメージは `Dockerfile.client` から作る。
 HTTPS の通信は、Squid が `CONNECT` で中継する（中身は復号しない）。ローカルと CI は HTTP のまま WireMock を使う。
 AWS では、タスクのセキュリティグループで、送信の 443 を許可する。
 タスクは Client が終わっても止まらない（Squid が `essential` のため）。検証後は手動で止める。
@@ -261,9 +261,9 @@ AWS では、タスクのセキュリティグループで、送信の 443 を�
 | --- | --- |
 | `squid-config/` | Squid の設定 |
 | `wiremock-scenarios/` | WireMock の応答定義（JSON） |
-| `test-client/` | リトライ付きの HTTP クライアント |
+| `app/` | クライアントアプリ（Node.js）。リトライとタイムアウトを持つ |
 | `ecs/` | ECS タスク定義のテンプレートと Squid のイメージ |
-| `scripts/` | 入口（`e2e.sh`）、起動と停止、4シナリオの実行（`e2e-scenarios.sh`） |
+| `scripts/` | 入口（`e2e.sh`）、起動と停止、7シナリオの実行（`e2e-scenarios.sh`） |
 | `.github/workflows/e2e-test.yml` | CI（shellcheck、actionlint、gitleaks、test:ci） |
 
 ## シナリオ
@@ -271,8 +271,11 @@ AWS では、タスクのセキュリティグループで、送信の 443 を�
 | シナリオ | 結果 | 目的 |
 | --- | --- | --- |
 | `normal` | 200 | 正常系 |
+| `slow-100` | 100 ミリ秒遅れて 200 | 少しの遅延では再試行しない |
 | `error-500-then-200` | 500 の後に 200 | 再試行して成功する |
-| `ratelimit-429` | 429 が続く | 再試行を使い切る |
+| `error-500` | 500 が続く | 待機を倍々にして、再試行を使い切る |
+| `error-503` | 503 が続く | 503 も 500 と同じく再試行する |
+| `ratelimit-429` | 429 が続く（`Retry-After: 2`） | `Retry-After` に従って待ち、再試行を使い切る |
 | `slow-5000` | 5 秒の遅延 | タイムアウトの処理 |
 
 詳しくは [E2Eテスト](docs/E2Eテスト.md)、[シナリオの隔離と追加](docs/シナリオ隔離.md)、

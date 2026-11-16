@@ -10,7 +10,7 @@
 
 ```bash
 npm run test:ci    # 起動、検査、収集、停止を続けて実行する
-sh scripts/e2e.sh test:ci normal error-500-then-200 ratelimit-429 slow-5000  # 4シナリオ
+sh scripts/e2e.sh test:ci normal slow-100 error-500-then-200 error-500 error-503 ratelimit-429 slow-5000  # 7シナリオ
 ```
 
 - 固定ポート 8080、14566、15000 は、入口のロック（既定は `/tmp/swsc-e2e-ports.lock`）で1つの実行だけに限る。
@@ -26,7 +26,7 @@ PR と push で、次の順に実行する。
 | shellcheck | 全 `.sh` を `-s sh -S style` で検査する | 3 分 |
 | actionlint | ワークフローを検査する | 2 分 |
 | gitleaks | 識別情報の値を検出する（`.gitleaks.toml`、値は出さない） | 2 分 |
-| test-ci | `npm run test:ci` と、4シナリオの `test:ci` | 10 分 |
+| test-ci | `npm run test:ci` と、7シナリオの `test:ci` | 10 分 |
 | collect / upload | 失敗時に収集したログを成果物に上げる | - |
 | stop | 残ったコンテナを必ず消す | - |
 

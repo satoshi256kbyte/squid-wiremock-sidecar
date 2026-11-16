@@ -7,7 +7,7 @@
 ## 実行方法
 
 ```sh
-sh scripts/e2e.sh test:ci normal error-500-then-200 ratelimit-429 slow-5000   # 4シナリオ（CI と同じ）
+sh scripts/e2e.sh test:ci normal slow-100 error-500-then-200 error-500 error-503 ratelimit-429 slow-5000   # 7シナリオ（CI と同じ）
 sh scripts/e2e.sh test:ci error-500-then-200                                    # 1シナリオだけ
 ```
 
@@ -24,7 +24,7 @@ WireMock、レジストリ、fakecloud を起動し、シナリオを実通信�
 | 2 | 引数の誤り。未定義または対象外のシナリオ名 |
 | 130、143 | 実行中に `INT` または `TERM` を受けた。後始末の後に終了する |
 
-## 4シナリオの期待値
+## 7シナリオの期待値
 
 | シナリオ | パス | 上書きする設定 | status | result | attempts | retries | wiremock | rc |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- |
