@@ -1,7 +1,10 @@
 #!/bin/sh
-# Squid の設定を SQUID_UPSTREAM に応じて派生させる（M09 FR-908、plan 3.4）。
-# 使い方: derive-config.sh <派生元 squid.conf> <出力先>
-# Why: squid-config/squid.conf を単一の情報源にし、上流だけを環境変数で切り替えるため。
+# SQUID_UPSTREAM に応じて、Squid の設定ファイル（squid.conf）を書き換える。
+#   mock   WireMock へ転送する。cache_peer の1行を、環境変数（SQUID_MOCK_HOST、SQUID_MOCK_PORT）の宛先に書き換える（行を編集）
+#   direct 外部 API へ直接つなぐ。WireMock への転送の3行を削除し、never_direct を always_direct に書き換える（行をカット）
+#   それ以外は、エラーで終了する
+# 使い方: derive-config.sh <書き換え前の squid.conf> <出力先>
+# Why: squid-config/squid.conf を唯一の元にし、転送先だけを環境変数で切り替えるため。
 # Why not 正規表現の置換: 派生元の行を完全一致で数えないと、似た行を誤って書き換えるため。
 set -eu
 

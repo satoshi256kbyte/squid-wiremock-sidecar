@@ -3,7 +3,7 @@ import * as ecs from 'aws-cdk-lib/aws-ecs';
 
 // タスク定義の元は ecs/task-definition.template.json の1つだけ。ここでは、その雛形を読み、
 // 許可したキーだけを通し、プレースホルダーと AWS 固有の値を置き換える。
-// Why: コンテナ名、環境変数、ヘルスチェック、依存関係を、CDK のコードに書かないため（R14）。
+// Why: コンテナ名、環境変数、ヘルスチェック、依存関係を、CDK のコードに書かないため。
 // Why: 雛形のキーは ECS の API の JSON と同じ camelCase で、CDK の L1 の props も camelCase のため、キーの変換は要らない。
 
 const TOP_KEYS = new Set([
@@ -16,7 +16,7 @@ const PLACEHOLDER = /^\{\{([A-Z_]+)\}\}$/;
 // Why: render（scripts/e2e-taskdef.py）の LOG_STREAM_PREFIX と同じ値。一致しているかは check-cdk が確かめる。
 const LOG_STREAM_PREFIX = 'swsc-e2e';
 const API_BASE_URL_ENV = 'TEST_API_BASE_URL';
-// Why: 本番は https:// だけ。パスや認証情報を入れて値が漏れないよう、スキームとホスト（とポート）に絞る（R15）。
+// Why: 本番は https:// だけ。パスや認証情報を入れて値が漏れないよう、スキームとホスト（とポート）に絞る。
 const API_BASE_URL_RE = /^https:\/\/[A-Za-z0-9.-]{1,253}(:[0-9]{1,5})?$/;
 
 type Json = null | boolean | number | string | Json[] | { [key: string]: Json };
@@ -47,7 +47,7 @@ function rejectUnknown(node: Obj, allowed: Set<string>, where: string): void {
   }
 }
 
-// 文字列全体がプレースホルダーのときだけ置き換える。未知の名前は拒否する。
+// テンプレートの {{名前}} を値で埋める。文字列全体が {{名前}} のときだけ置き換え、未知の名前は拒否する。
 function fill(node: Json, values: Record<string, string>): Json {
   if (Array.isArray(node)) {
     return node.map((v) => fill(v, values));
@@ -75,7 +75,9 @@ export function buildTaskDefinitionProps(input: TaskDefinitionInput): ecs.CfnTas
   const template = asObject(JSON.parse(fs.readFileSync(input.templatePath, 'utf-8')) as Json, 'タスク定義の雛形');
   rejectUnknown(template, TOP_KEYS, 'トップレベル');
 
-  // Why: SQUID_UPSTREAM は direct に固定する。AWS 用のスタックは WireMock を使わない（R15）。
+  // テンプレートの変数展開（fill 関数）。
+  // この時、SQUID_UPSTREAM は direct に固定する。AWS 用のスタックは WireMock を使わない。
+  // これにより、Squid のコンテナの起動スクリプトが、WireMock へ転送しない設定に書き換える。
   const filled = asObject(
     fill(template, {
       CLIENT_IMAGE: input.clientImage,
