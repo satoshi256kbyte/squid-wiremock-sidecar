@@ -632,9 +632,6 @@ swsc_collect_env() {
     for _i in "$SWSC_LOCAL_CLIENT_IMAGE" "$SWSC_LOCAL_SQUID_IMAGE"; do
       printf 'image %s: %s\n' "$_i" "$(docker image inspect --format '{{.Id}}' "$_i" 2>/dev/null || echo 取得不可)"
     done
-    # Why: 派生イメージの Id だけでは、基底の ubuntu/squid:latest がどの版だったかを後から特定できない（レビュー M-3）。
-    printf 'base ubuntu/squid:latest: %s\n' \
-      "$(docker image inspect --format '{{index .RepoDigests 0}}' ubuntu/squid:latest 2>/dev/null || echo 取得不可)"
     for _n in fakecloud registry wiremock; do
       docker inspect --format 'name={{.Name}} image={{.Config.Image}} id={{.Image}}' "${SWSC_PREFIX}${_n}" \
         2>/dev/null || true
