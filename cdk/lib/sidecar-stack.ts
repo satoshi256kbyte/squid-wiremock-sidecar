@@ -24,7 +24,7 @@ export class SidecarStack extends Stack {
     // Why: ARM64 固定。arm64 の Mac でビルドしたイメージと、Fargate の ARM64 を合わせる。
     const clientImage = new DockerImageAsset(this, 'ClientImage', {
       directory: props.assets.clientDir,
-      file: 'Dockerfile.test-client',
+      file: 'Dockerfile.client',
       platform: Platform.LINUX_ARM64,
     });
     const squidImage = new DockerImageAsset(this, 'SquidImage', {
