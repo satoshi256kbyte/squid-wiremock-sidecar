@@ -50,7 +50,7 @@ Client → Squid (:3128) → 外部 API（HTTPS）       AWS（SQUID_UPSTREAM=di
 
 | 区分 | 技術 | 版 | 用途 |
 | --- | --- | --- | --- |
-| プロキシ | Squid（`ubuntu/squid` の派生イメージ） | `latest`（固定していない） | 許可ドメインだけを中継する。HTTPS は `CONNECT` で通すだけで、復号しない |
+| プロキシ | Squid（`ubuntu/squid` の派生イメージ） | 6.13（ダイジェストで固定） | 許可ドメインだけを中継する。HTTPS は `CONNECT` で通すだけで、復号しない |
 | モック | WireMock | 3.13.1 | 外部 API の応答（正常、エラー、遅延）を JSON で定義して返す |
 | Client（アプリ） | Node.js（依存パッケージなし。`node:22-alpine`） | Node 22 | 外部 API を呼ぶクライアントアプリ。リトライとタイムアウトを持つ。E2E の対象 |
 | ECS エミュレータ | fakecloud | 0.51.0（ダイジェストで固定） | ローカルと CI で、タスク定義を `run-task` して動かす。AGPL-3.0 |
